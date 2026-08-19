@@ -1,0 +1,18 @@
+QUIOSQUE WEB — pasta para publicar no GitHub
+=============================================
+
+Estes ficheiros SAO o quiosque online (motoristas no telemovel + todos os aparelhos por um link).
+NAO ha aqui NENHUM dado pessoal — e seguro carregar tudo para o GitHub.
+
+O QUE FAZER (uma vez):
+  1. Cria um repositorio novo no github.com (ex.: "quiosque-embaresa").
+  2. Carrega TODOS os ficheiros desta pasta.
+  3. Ativa o GitHub Pages (Settings -> Pages -> Branch: main).
+  4. O link fica tipo:  https://<o-teu-utilizador>.github.io/quiosque-embaresa/
+
+A LISTA DE OPERADORES (nomes/PINs) NAO esta aqui de proposito — vem da nuvem
+(fluxo Power Automate), para nao ficar publica. Ate esse fluxo estar pronto,
+o quiosque online ainda nao tem operadores para entrar.
+
+ATUALIZACOES: quando algo muda, troca-se so o ficheiro no GitHub e todos os
+aparelhos apanham a versao nova sozinhos (o quiosque avisa "nova versao").
