@@ -166,6 +166,25 @@ async function loadConfig(){
   return null;
 }
 async function loadEnc(){
+  // 1) encomendas LIVE da nuvem (fluxo Power Automate) — artigo = Caixa
+  const url=(state.cfg && state.cfg.urlEncomendas)||null;
+  if(url){
+    try{
+      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'});
+      if(r.ok){ let rows=await r.json(); if(!Array.isArray(rows)) rows=(rows&&rows.value)||[];
+        const enc=rows.filter(x=>x && (x.NumSerie||x['Nº série'])).map(x=>({
+          serie:String(x.NumSerie||x['Nº série']||'').trim(),
+          artigo:String(x.Caixa||'').trim(),
+          tipologia:String(x.Tipologia||'').trim(),
+          estado:String(x.Estado||'').trim(),
+          po:String(x.PO||'').trim(),
+          pos:String(x.POS||'').trim()
+        }));
+        if(enc.length){ localStorage.setItem('q_enc_cache',JSON.stringify(enc)); return enc; }
+      }
+    }catch(e){}
+  }
+  // 2) ficheiro local (teste) / 3) ultima copia guardada (offline)
   try{ const r=await fetch('encomendas.json',{cache:'no-store'}); if(r.ok){ const e=await r.json(); localStorage.setItem('q_enc_cache',JSON.stringify(e)); return e; } }catch(e){}
   const c=localStorage.getItem('q_enc_cache'); return c?JSON.parse(c):[];
 }
@@ -728,6 +747,8 @@ if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catc
 
 /* ---- re-verificar a lista de operadores/config de 2 em 2 min (novos aparecem sozinhos) ---- */
 setInterval(async function(){ try{ var c=await loadConfig(); if(c && c.operadores){ state.cfg=c; } }catch(e){} }, 120000);
+/* ---- re-carregar encomendas live de 5 em 5 min ---- */
+setInterval(async function(){ try{ var e=await loadEnc(); if(e && e.length){ state.enc=e; } }catch(e){} }, 300000);
 </script>
 </body>
 </html>
