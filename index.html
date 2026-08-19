@@ -149,7 +149,7 @@ function closeWorkerPause(w){ const p=w.pauses[w.pauses.length-1]; if(p&&!p.end)
 /* ---------- carregar config ---------- */
 /* URL da lista de operadores na NUVEM (fluxo Power Automate). Vazio = usa so o ficheiro local.
    Quando o fluxo estiver pronto, poe aqui o URL e os nomes/PINs deixam de precisar do ficheiro. */
-const CONFIG_URL = "";
+const CONFIG_URL = "https://defaultcade90c14fe343a3860494c20418f8.fb.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/04/workflows/3aca907317474a4eb1b0ed7a66633884/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=zcGqAP9EoJ8WgfX_liO4X2dOvNtHAg-JAItn4SMSxeM";
 async function loadConfig(){
   // 1) nuvem (privado) — se configurado
   if(CONFIG_URL){
