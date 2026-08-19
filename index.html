@@ -639,10 +639,14 @@ function buildAtivos(){
     desdeMin:Math.floor((nowTs()-p.startTs)/60000), estado:'pausa' }); });
   return out;
 }
+function deviceName(){
+  try{ const p=new URLSearchParams(location.search).get('d'); if(p){ localStorage.setItem('q_dispositivo',p); return p; } }catch(e){}
+  return localStorage.getItem('q_dispositivo') || 'Sem nome';
+}
 async function enviarBatimento(){
   const url=(state.cfg && state.cfg.urlAtivos)||null; if(!url) return; // sem fluxo definido -> nao envia
-  const dispositivo=(state.cfg && state.cfg.dispositivo) || localStorage.getItem('q_dispositivo') || 'Quiosque';
-  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dispositivo, ativos:buildAtivos()})}); }catch(e){}
+  const payload={ dispositivo:deviceName(), momento:new Date().toISOString(), dados:JSON.stringify(buildAtivos()) };
+  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); }catch(e){}
 }
 var _hbT=null;
 function agendarBatimento(){ clearTimeout(_hbT); _hbT=setTimeout(enviarBatimento,1500); }
