@@ -171,9 +171,11 @@ async function loadEnc(){
 }
 /* área do operador -> unidades de operação permitidas */
 function areaUnidades(op){ if(!op) return null; const u=op.unidade||''; const s=(op.seccao||'').toLowerCase();
+  if(op.unidades && op.unidades.length) return op.unidades;      // lista explicita por operador (prioridade)
   if(s.indexOf('soldad')>=0) return [u+'-Soldadura'];
-  if(s.indexOf('transp')>=0) return ['Transportes'];
+  if(s.indexOf('fra')>=0) return ['Évora 2-Montagem'];           // Frações -> Produção de fracções
   if(s.indexOf('montag')>=0){ if(u.indexOf('2')>=0) return ['Évora 2-Montagem']; return ['Evora1-Montagem','Evora1-Embalamento']; }
+  if(s.indexOf('transp')>=0) return ['Transportes'];
   return null; /* null = sem filtro (ex.: Geral) */ }
 function artigosDaArea(){ const ativos=new Set(artigosAtivos()); if(!state.area) return ativos;
   const set=new Set(); state.cfg.operacoes.forEach(o=>{ if(state.area.includes(o.unidade)) o.artigos.forEach(a=>{ if(ativos.has(a)) set.add(a); }); }); return set; }
@@ -714,6 +716,18 @@ if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catc
   }
   verVersao(); setInterval(verVersao, 180000);  // verifica de 3 em 3 min
 })();
+
+/* ---- manter o ecra ACESO enquanto o quiosque esta aberto (evita suspensao) ---- */
+(function(){
+  var wl=null;
+  async function pedir(){ try{ if('wakeLock' in navigator){ wl=await navigator.wakeLock.request('screen'); } }catch(e){} }
+  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') pedir(); });
+  document.addEventListener('click', pedir, { once:false });   // reforca apos toque (alguns browsers exigem gesto)
+  pedir();
+})();
+
+/* ---- re-verificar a lista de operadores/config de 2 em 2 min (novos aparecem sozinhos) ---- */
+setInterval(async function(){ try{ var c=await loadConfig(); if(c && c.operadores){ state.cfg=c; } }catch(e){} }, 120000);
 </script>
 </body>
 </html>
