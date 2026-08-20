@@ -374,7 +374,7 @@ function confirmOp(){
   if(state.intent==='pert'){ state.pertDraft={motivo:null}; state.view='pertmotivo'; }
   else if(state.intent==='jobaction'){ state.curJob=state.jobActionId; state.jobPhase='menu'; state.view='job'; }
   else if(state.intent==='retomar'){ return retomarDoOperador(op); }
-  else { state.draft={ artigo:null, operacao:null, modo:'Encomenda', sel:[], stock:'' }; state.view='artigo'; }
+  else { state.draft={ artigo:null, operacao:null, modo:'Encomenda', sel:[], stock:'' }; state._prog=null; state._af=''; state.view='artigo'; }
   render();
 }
 function renderPertMotivo(w){
@@ -421,23 +421,51 @@ function renderArtigo(w){
   w.append(backbar('board', 'Olá, '+curto(state.op.nome)));
   w.append(el('div',{class:'chip',style:'margin-bottom:4px'}, 'Área: '+(state.op.seccao||'—')+(state.op.unidade?(' · '+state.op.unidade):'')));
   w.append(el('p',{class:'lbl'},'O que vais produzir?'));
-  const inp=el('input',{class:'search',placeholder:'Procurar artigo…',oninput:(e)=>{state._af=e.target.value;fillArtigos();}});
+  const inp=el('input',{class:'search',placeholder:'Procurar artigo…',value:state._af||'',oninput:(e)=>{state._af=e.target.value;fillArtigos();}});
   w.append(inp);
   const list=el('div',{class:'list',id:'artlist'}); w.append(list);
   setTimeout(fillArtigos,0);
 }
+function itemArtigo(a, programa){
+  return el('button',{class:'item',onclick:()=>{ state.draft.artigo=a; state.draft.programa=programa; state.view='operacao'; render(); }},
+    el('span',{class:'t'}, el('b',{},a), el('small',{}, programa||'')),
+    el('span',{class:'chev'},'›'));
+}
 function fillArtigos(){
   const list=$('#artlist'); if(!list)return; list.innerHTML='';
   const f=(state._af||'').toLowerCase();
-  const prog={}; state.cfg.artigos.forEach(a=>{ prog[a.artigo]=a.programa; });
+  const prog={}; state.cfg.artigos.forEach(a=>{ prog[a.artigo]=a.programa||''; });
   const base=[...(state.allowedArt||new Set(artigosAtivos()))].sort();
-  const ativos=base.filter(a=>a.toLowerCase().includes(f)).slice(0,80);
-  if(!ativos.length){ list.append(el('div',{class:'empty'},'Sem resultados.')); return; }
-  for(const a of ativos){
-    list.append(el('button',{class:'item',onclick:()=>{ state.draft.artigo=a; state.draft.programa=prog[a]; state.view='operacao'; render(); }},
-      el('span',{class:'t'}, el('b',{},a), el('small',{}, prog[a]||'')),
-      el('span',{class:'chev'},'›')));
+
+  // Com pesquisa: resultados planos (procura em todas as tipologias)
+  if(f){
+    const ativos=base.filter(a=>a.toLowerCase().includes(f)).slice(0,80);
+    if(!ativos.length){ list.append(el('div',{class:'empty'},'Sem resultados.')); return; }
+    for(const a of ativos) list.append(itemArtigo(a, prog[a]));
+    return;
   }
+
+  // Sem pesquisa, nível 1: botões por TIPOLOGIA (programa)
+  if(!state._prog){
+    const grupos={};
+    base.forEach(a=>{ const p=prog[a]||'Outros'; (grupos[p]=grupos[p]||[]).push(a); });
+    const nomes=Object.keys(grupos).sort();
+    if(!nomes.length){ list.append(el('div',{class:'empty'},'Sem artigos.')); return; }
+    for(const p of nomes){
+      const n=grupos[p].length;
+      list.append(el('button',{class:'item',onclick:()=>{ state._prog=p; fillArtigos(); }},
+        el('span',{class:'t'}, el('b',{},p), el('small',{}, n+' artigo'+(n>1?'s':''))),
+        el('span',{class:'chev'},'›')));
+    }
+    return;
+  }
+
+  // Nível 2: só os artigos da tipologia escolhida (+ voltar às tipologias)
+  list.append(el('button',{class:'item',style:'opacity:.8',onclick:()=>{ state._prog=null; fillArtigos(); }},
+    el('span',{class:'t'}, el('b',{},'‹ Tipologias')), el('span',{class:'chev'},'')));
+  const doProg=base.filter(a=>(prog[a]||'Outros')===state._prog).sort();
+  if(!doProg.length){ list.append(el('div',{class:'empty'},'Sem artigos nesta tipologia.')); return; }
+  for(const a of doProg) list.append(itemArtigo(a, prog[a]));
 }
 
 /* ---- ESCOLHER OPERAÇÃO ---- */
@@ -458,11 +486,9 @@ function renderOperacao(w){
   w.append(list);
 }
 function planobar(p){ return el('div',{class:'planobar'},
-  el('div',{class:'pi'},'Plano ', el('b',{},p.codigo||p.artigo), p.variante?(' · '+p.variante):''),
-  el('button',{class:'verplano',onclick:()=>verPlano(p)},'📄 Ver plano')); }
-function verPlano(p){ // tenta abrir o PDF (caminho relativo à pasta do sistema)
-  const rel='../'+ (p.ficheiro||'').replace(/\\/g,'/');
-  window.open(rel,'_blank'); }
+  el('div',{class:'pi'},'Plano ', el('b',{},p.codigo||p.artigo), p.variante?(' · '+p.variante):'')); }
+// NOTA: os planos (desenhos aeronáuticos) NÃO se abrem no quiosque online — nunca vão para a web.
+// Abrem-se só no Sistema Embaresa local (PC/monitor), que serve a pasta Planos. Botão removido de propósito.
 
 /* ---- SÉRIES / MODO ---- */
 function renderSeries(w){
