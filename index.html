@@ -485,10 +485,18 @@ function renderOperacao(w){
   }
   w.append(list);
 }
-function planobar(p){ return el('div',{class:'planobar'},
-  el('div',{class:'pi'},'Plano ', el('b',{},p.codigo||p.artigo), p.variante?(' · '+p.variante):'')); }
-// NOTA: os planos (desenhos aeronáuticos) NÃO se abrem no quiosque online — nunca vão para a web.
-// Abrem-se só no Sistema Embaresa local (PC/monitor), que serve a pasta Planos. Botão removido de propósito.
+function planobar(p){
+  const base=(state.cfg&&state.cfg.urlPlanos)||'';
+  const temPdf = base && (p.ficheiro||'');
+  return el('div',{class:'planobar'},
+    el('div',{class:'pi'},'Plano ', el('b',{},p.codigo||p.artigo), p.variante?(' · '+p.variante):''),
+    temPdf ? el('button',{class:'verplano',onclick:()=>verPlano(p)},'📄 Ver plano') : null); }
+// Os planos (desenhos) abrem por um fluxo PRIVADO trancado à pasta Planos (nunca vão em bruto para a web).
+function verPlano(p){
+  const base=(state.cfg&&state.cfg.urlPlanos)||'';
+  const f=(p.ficheiro||'').replace(/\\/g,'/');
+  if(base&&f) window.open(base+'&f='+encodeURIComponent(f),'_blank');
+}
 
 /* ---- SÉRIES / MODO ---- */
 function renderSeries(w){
