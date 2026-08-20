@@ -321,7 +321,7 @@ function renderBoard(w){
   const board=el('div',{class:'board'});
   for(const j of active){
     const run=jobRunning(j); const wa=jobWorkersAtivos(j);
-    const nomes=[...new Set((j.workers||[]).map(w=>w.opCurto).filter(Boolean))];
+    const nomes=[...new Set(jobWorkersAtivos(j).map(w=>w.opCurto).filter(Boolean))]; // so quem ainda esta ativo (quem concluiu/parou sai do cartao)
     const estado = run?'A correr':(wa.length?'Pausa':'Parada');
     const c=el('button',{class:'m '+(run?'run':'pause'), onclick:()=>{state.draft=null;openJob(j.id);}},
       el('div',{class:'mh'}, el('span',{class:'prog'}, j.programa+' · '+postoDaUnidade(j.unidade)),
