@@ -113,7 +113,7 @@
    Local-first: cada evento é guardado no instante. Offline OK.
    ============================================================ */
 const LS = {
-  cfg:'q_config_cache', jobs:'q_jobs', queue:'q_sync_queue', done:'q_done_hoje', perts:'q_perts', pertq:'q_pert_queue'
+  cfg:'q_config_cache', jobs:'q_jobs', queue:'q_sync_queue', done:'q_done_hoje', perts:'q_perts', pertq:'q_pert_queue', sent:'q_sent_ids'
 };
 const state = { cfg:null, view:'load', op:null, jobs:[], perts:[], draft:null, toast:null };
 
@@ -134,6 +134,10 @@ function saveQueue(q){ try{ localStorage.setItem(LS.queue,JSON.stringify(q)); }c
 function loadQueue(){ try{ return JSON.parse(localStorage.getItem(LS.queue)||'[]'); }catch(e){ return []; } }
 function loadPertQ(){ try{ return JSON.parse(localStorage.getItem(LS.pertq)||'[]'); }catch(e){ return []; } }
 function savePertQ(q){ try{ localStorage.setItem(LS.pertq,JSON.stringify(q)); }catch(e){} }
+/* ---- anti-duplicados: registo de IDs ja enviados com sucesso ---- */
+function sentIds(){ try{ return JSON.parse(localStorage.getItem(LS.sent)||'[]'); }catch(e){ return []; } }
+function jaEnviado(id){ return id && sentIds().indexOf(id)!==-1; }
+function marcarEnviado(id){ try{ if(!id)return; let s=sentIds(); if(s.indexOf(id)===-1){ s.push(id); if(s.length>800) s=s.slice(-800); localStorage.setItem(LS.sent,JSON.stringify(s)); } }catch(e){} }
 function pertRecord(op,motivo,ini,fim){ return { IDRegisto:'P'+Date.now()+Math.floor(Math.random()*1000), Data:dstr(ini), Colaborador:op, TipoPerturbacao:motivo, HoraInicio:hhmm(ini), HoraFim:hhmm(fim), Duracao:Math.round(Math.max(0,fim-ini)/60000).toString(), DataHoraRegisto:new Date().toLocaleString('pt-PT') }; }
 function enqueuePerturbacao(rec){ const q=loadPertQ(); q.push(rec); savePertQ(q); syncPertQueue(); }
 function closePause(j){ const p=j.pauses[j.pauses.length-1]; if(p&&!p.end){ p.end=nowTs(); if(p.motivo) enqueuePerturbacao(pertRecord(j.op,p.motivo,p.start,p.end)); } }
@@ -311,7 +315,7 @@ function renderBoard(w){
         el('div',{class:'timer',style:'color:var(--pause)','data-pert':p.id}, fmtDur(nowTs()-p.startTs))))));
     w.append(pb);
   }
-  const active=state.jobs.filter(j=>j.status!=='done');
+  const active=state.jobs.filter(j=>j.status!=='done' && jobWorkersAtivos(j).length>0); // esconde os parados (sem ninguem ativo); retomam-se entrando de novo
   if(!active.length){ if(!state.perts.length) w.append(el('div',{class:'empty'},'Sem trabalhos a decorrer.')); return; }
   w.append(el('p',{class:'lbl',style:'margin-top:6px'},'Trabalhos'));
   const board=el('div',{class:'board'});
@@ -335,9 +339,13 @@ function renderBoard(w){
   }
   w.append(board);
 }
-function ctaBoard(){ return el('div',{class:'cta'},
-  el('button',{class:'big', onclick:()=>{ state.intent='work'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '▶  Iniciar / entrar num trabalho'),
-  el('button',{class:'big warn',style:'margin-top:10px', onclick:()=>{ state.intent='pert'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '⏸  Registar paragem')); }
+function ctaBoard(){
+  const haPausa = state.jobs.some(j=>j.status!=='done' && (j.workers||[]).some(w=>!w.endTs && w.status==='paused'));
+  const cta=el('div',{class:'cta'},
+    el('button',{class:'big', onclick:()=>{ state.intent='work'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '▶  Iniciar / entrar num trabalho'),
+    el('button',{class:'big warn',style:'margin-top:10px', onclick:()=>{ state.intent='pert'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '⏸  Registar paragem'));
+  if(haPausa) cta.append(el('button',{class:'big ok',style:'margin-top:10px', onclick:()=>{ state.intent='retomar'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '▶  Retomar trabalho em pausa'));
+  return cta; }
 
 /* ---- PIN ---- */
 function renderPin(w){
@@ -365,6 +373,7 @@ function confirmOp(){
   state.pendingOp=null; state.pinbuf='';
   if(state.intent==='pert'){ state.pertDraft={motivo:null}; state.view='pertmotivo'; }
   else if(state.intent==='jobaction'){ state.curJob=state.jobActionId; state.jobPhase='menu'; state.view='job'; }
+  else if(state.intent==='retomar'){ return retomarDoOperador(op); }
   else { state.draft={ artigo:null, operacao:null, modo:'Encomenda', sel:[], stock:'' }; state.view='artigo'; }
   render();
 }
@@ -561,6 +570,14 @@ function renderJob(w){
 }
 function pauseWorker(j,wk){ if(!wk){state.jobPhase='menu';return render();} wk.status='paused'; wk.pauseMotivo=state._rsn||'Paragem'; wk.pauses.push({start:nowTs(),motivo:wk.pauseMotivo}); state._rsn=null; state._pw=null; state.jobPhase='menu'; save(); toast('Em pausa','ok'); state.view='board'; render(); }
 function resumeWorker(j,wk){ closeWorkerPause(wk); wk.status='running'; wk.pauseMotivo=null; save(); toast('Retomado','ok'); render(); }
+function retomarDoOperador(op){
+  // Retoma TODAS as sessoes em pausa deste operador (normalmente uma). Identidade pelo PIN.
+  const meus=[];
+  state.jobs.filter(j=>j.status!=='done').forEach(j=>{ (j.workers||[]).forEach(w=>{ if(String(w.pin)===String(op.pin) && !w.endTs && w.status==='paused') meus.push(w); }); });
+  if(!meus.length){ toast('Não tens nenhum trabalho em pausa','err'); state.view='board'; return render(); }
+  meus.forEach(w=>{ closeWorkerPause(w); w.status='running'; w.pauseMotivo=null; });
+  save(); toast(meus.length>1?('Retomados '+meus.length+' trabalhos'):'Trabalho retomado','ok'); state.view='board'; render();
+}
 function guiado(j,opObj){ const sig=j.artigo+'|'+j.series.slice().sort().join(','); if(!state.cont||state.cont.sig!==sig){ state.cont={ sig, artigo:j.artigo, programa:j.programa, series:j.series.slice(), modo:j.modo, done:{} }; } state.cont.done[j.operacao]=true; state.lastOp=j.operacao; if(opObj&&opObj.nome) state.cont.op=opObj; }
 function leaveWorker(j,wk){ if(wk.status==='paused')closeWorkerPause(wk); wk.endTs=nowTs(); wk.status='parado'; enqueueRegisto(j,wk,false);
   save(); toast(wk.opCurto+' — sessão registada. A operação continua aberta.','ok'); state.view='board'; render(); }
@@ -617,7 +634,9 @@ function enqueueRegisto(j,wk,concluida){
   const dh = new Date().toLocaleString('pt-PT');
   const q=loadQueue();
   series.forEach(serie=>{
-    q.push({ ID:j.id+'-'+(wk.pin||'x')+'-'+wk.startTs+'-'+serie, Data:j.dia, Artigo:j.artigo, Programa:j.programa, Operacao:j.operacao,
+    const _id = j.id+'-'+(wk.pin||'x')+'-'+wk.startTs+'-'+serie;
+    if(jaEnviado(_id) || q.some(x=>x.ID===_id)) return; // anti-duplicado: mesmo ID ja enviado ou ja na fila
+    q.push({ ID:_id, Data:j.dia, Artigo:j.artigo, Programa:j.programa, Operacao:j.operacao,
       UnidadeProducao:j.unidade, Posto:postoDaUnidade(j.unidade), Colaborador:wk.op, Modo:j.modo,
       NumSerie:serie, HoraInicio:hhmm(wk.startTs), HoraFim:hhmm(wk.endTs||nowTs()),
       PausasMin:Math.round(pauMs/60000).toString(), Duracao:Math.round(durMs/60000).toString(),
@@ -626,14 +645,23 @@ function enqueueRegisto(j,wk,concluida){
   });
   saveQueue(q); syncQueue();
 }
+var _syncing=false;
 async function syncQueue(){
+  if(_syncing) return;                       // tranca: nunca dois envios em simultaneo (evitava duplicados)
   const url=(state.cfg && state.cfg.urlProducao)||null; // definido depois (fluxo Power Automate)
   let q=loadQueue(); if(!q.length)return;
   if(!url) return; // sem fluxo definido: fica em fila local (v0.1)
-  const resto=[];
-  for(const reg of q){ let ok=false;
-    try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(reg)}); ok=r.ok; }catch(e){ ok=false; }
-    if(!ok)resto.push(reg); }
+  _syncing=true;
+  const resto=[]; const vistos={};
+  try{
+    for(const reg of q){
+      if(reg.ID && (jaEnviado(reg.ID) || vistos[reg.ID])) continue; // ja enviado / repetido na fila -> descarta
+      if(reg.ID) vistos[reg.ID]=1;
+      let ok=false;
+      try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(reg)}); ok=r.ok; }catch(e){ ok=false; }
+      if(ok){ marcarEnviado(reg.ID); } else { resto.push(reg); }
+    }
+  } finally { _syncing=false; }
   saveQueue(resto); render();
 }
 async function syncPertQueue(){
