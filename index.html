@@ -301,9 +301,9 @@ function topbar(){
 /* ---- BOARD ---- */
 function renderBoard(w){
   w.append(el('h2',{},'Trabalhos a decorrer'));
-  w.append(el('p',{class:'muted'},'Toca num trabalho para pausar ou terminar.'));
+  w.append(el('p',{class:'muted'},'Toca num trabalho para o abrir.'));
   const openOld = state.jobs.filter(j=>j.status!=='done' && j.dia!==dstr(nowTs()));
-  if(openOld.length) w.append(el('div',{class:'flag'},'⚠️ '+openOld.length+' trabalho(s) de dias anteriores ainda abertos — foram pausados automaticamente. Retoma ou termina.'));
+  if(openOld.length) w.append(el('div',{class:'flag'},'⚠️ '+openOld.length+' trabalho(s) de dias anteriores ainda abertos — entra e conclui ou pára.'));
   // paragens gerais a decorrer
   if(state.perts.length){
     w.append(el('p',{class:'lbl',style:'margin-top:0;color:var(--pause)'},'⏸ Paragens a decorrer'));
@@ -340,11 +340,9 @@ function renderBoard(w){
   w.append(board);
 }
 function ctaBoard(){
-  const haPausa = state.jobs.some(j=>j.status!=='done' && (j.workers||[]).some(w=>!w.endTs && w.status==='paused'));
   const cta=el('div',{class:'cta'},
     el('button',{class:'big', onclick:()=>{ state.intent='work'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '▶  Iniciar / entrar num trabalho'),
     el('button',{class:'big warn',style:'margin-top:10px', onclick:()=>{ state.intent='pert'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '⏸  Registar paragem'));
-  if(haPausa) cta.append(el('button',{class:'big ok',style:'margin-top:10px', onclick:()=>{ state.intent='retomar'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '▶  Retomar trabalho em pausa'));
   return cta; }
 
 /* ---- PIN ---- */
@@ -373,7 +371,6 @@ function confirmOp(){
   state.pendingOp=null; state.pinbuf='';
   if(state.intent==='pert'){ state.pertDraft={motivo:null}; state.view='pertmotivo'; }
   else if(state.intent==='jobaction'){ state.curJob=state.jobActionId; state.jobPhase='menu'; state.view='job'; }
-  else if(state.intent==='retomar'){ return retomarDoOperador(op); }
   else { state.draft={ artigo:null, operacao:null, modo:'Encomenda', sel:[], stock:'' }; state._prog=null; state._af=''; state.view='artigo'; }
   render();
 }
@@ -563,14 +560,6 @@ function renderJob(w){
     el('div',{class:'pi'}, '⏱ horas-homem ', el('b',{'data-jtimer':j.id}, fmtDur(activeMs(j)))),
     el('div',{class:'chip'}, (j.series.length)+' série(s)'+(j.modo==='Stock'?' · STOCK':''))));
 
-  if(state.jobPhase==='pausa'){
-    w.append(el('p',{class:'lbl'},'Motivo da paragem — '+(state._pw?state._pw.opCurto:'')));
-    const box=el('div',{class:'reasons'});
-    state.cfg.perturbacoes.slice(0,14).forEach(r=>box.append(el('button',{class:'rc'+(state._rsn===r?' on':''),onclick:()=>{state._rsn=r;render();}},r)));
-    w.append(box);
-    w.append(el('button',{class:'big warn',style:'margin-top:14px',onclick:()=>pauseWorker(j,state._pw)},'⏸  Confirmar paragem'));
-    return;
-  }
   if(state.jobPhase==='fim'){
     w.append(el('p',{class:'lbl'},'Quantidade concluída (nesta operação)'));
     state._qty = state._qty || j.series.length || 1;
@@ -591,15 +580,11 @@ function renderJob(w){
   jobWorkersAtivos(j).forEach(wk=>{
     const mine = myW && wk.pin===myW.pin;
     list.append(el('div',{class:'item',style:'align-items:center'+(mine?';border-color:var(--cy)':'')},
-      el('span',{class:'t'}, el('b',{},wk.opCurto+(mine?' (tu)':'')), el('small',{}, (wk.status==='paused'?('⏸ '+(wk.pauseMotivo||'pausa')):'a trabalhar')+' · '+fmtHM(wActive(wk)))),
-      mine ? (wk.status==='running'
-        ? el('button',{class:'rc',style:'border-color:#4a3a12;color:var(--pause)',onclick:()=>{state._pw=wk;state._rsn=null;state.jobPhase='pausa';render();}},'⏸ Pausa')
-        : el('button',{class:'rc',style:'border-color:#1c4a3c;color:var(--run)',onclick:()=>resumeWorker(j,wk)},'▶ Retomar')) : null,
-      mine ? el('button',{class:'rc',style:'margin-left:6px',onclick:()=>leaveWorker(j,wk)},'⏹ Parar') : null));
+      el('span',{class:'t'}, el('b',{},wk.opCurto+(mine?' (tu)':'')), el('small',{}, 'a trabalhar · '+fmtHM(wActive(wk))))));
   });
   w.append(list);
-  if(!isWorker){ w.append(el('div',{class:'flag'},'⛔ Não estás neste trabalho — só um operador registado nele o pode parar ou concluir. (Correções são para o supervisor.)')); return; }
-  w.append(el('p',{class:'muted',style:'margin:14px 0 6px;font-size:12px'},'⏹ "Parar" regista o teu tempo e deixa a operação aberta. Só usa "Operação concluída" quando a operação nestas séries está mesmo terminada.'));
+  if(!isWorker){ w.append(el('div',{class:'flag'},'⛔ Não estás neste trabalho — só um operador registado nele o pode concluir. (Correções são para o supervisor.)')); return; }
+  w.append(el('p',{class:'muted',style:'margin:14px 0 6px;font-size:12px'},'Toca em "Operação concluída" quando terminares esta operação. Para mudar de operação, conclui esta e entra na próxima.'));
   w.append(el('button',{class:'big ok',style:'margin-top:4px',onclick:()=>{state._qty=null;state.jobPhase='fim';render();}},'✅  Operação concluída (fecha o trabalho)'));
 }
 function pauseWorker(j,wk){ if(!wk){state.jobPhase='menu';return render();} wk.status='paused'; wk.pauseMotivo=state._rsn||'Paragem'; wk.pauses.push({start:nowTs(),motivo:wk.pauseMotivo}); state._rsn=null; state._pw=null; state.jobPhase='menu'; save(); toast('Em pausa','ok'); state.view='board'; render(); }
