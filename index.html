@@ -212,11 +212,11 @@ function planoDoArtigo(art){ // devolve o plano OK (default aéreo/único)
   if(!ps.length) return null;
   const aereo=ps.find(p=>!p.variante || p.variante==='Aéreo'); return aereo||ps[0]; }
 function postoDaUnidade(u){ const p=state.cfg.postos.find(x=>x.unidade===u); return p?p.posto:(u||''); }
-function objetivoOperacao(op){ return state.cfg.temposOperacao[op]||''; }
+function objetivoOperacao(op, artigo){ const ao=state.cfg.temposArtigoOperacao||{}; let v=(artigo?(ao[artigo+'|'+op]||''):''); if(!v) v=state.cfg.temposOperacao[op]||''; if(!v && artigo) v=(state.cfg.temposTipologia||{})[artigo]||''; return v; }
 function parseObjetivoMs(str){ if(!str) return 0; str=String(str).trim();
   if(str.indexOf(':')>=0){ const p=str.split(':').map(Number); return (((p[0]||0)*3600)+((p[1]||0)*60)+(p[2]||0))*1000; }
   const v=parseFloat(str.replace(',','.')); return isNaN(v)?0:v*3600000; }
-function objetivoMsJob(j){ const per=parseObjetivoMs(objetivoOperacao(j.operacao)); return per*Math.max(1,(j.series||[]).length); }
+function objetivoMsJob(j){ const per=parseObjetivoMs(objetivoOperacao(j.operacao, j.artigo)); return per*Math.max(1,(j.series||[]).length); }
 function fmtHM(ms){ const m=Math.max(0,Math.round(ms/60000)); return two(Math.floor(m/60))+':'+two(m%60); }
 /* ---- velocímetro (efetivo vs objetivo) ---- */
 function pol(cx,cy,r,deg){ const a=deg*Math.PI/180; return [cx+r*Math.cos(a), cy-r*Math.sin(a)]; }
@@ -270,6 +270,9 @@ function render(){
     else if(state.view==='pin') renderPin(w);
     else if(state.view==='confirma') renderConfirma(w);
     else if(state.view==='artigo') renderArtigo(w);
+    else if(state.view==='planos') renderPlanos(w);
+    else if(state.view==='stockmap') renderStockMap(w);
+    else if(state.view==='stockmov') renderStockMov(w);
     else if(state.view==='operacao') renderOperacao(w);
     else if(state.view==='series') renderSeries(w);
     else if(state.view==='job') renderJob(w);
@@ -342,7 +345,9 @@ function renderBoard(w){
 function ctaBoard(){
   const cta=el('div',{class:'cta'},
     el('button',{class:'big', onclick:()=>{ state.intent='work'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '▶  Iniciar / entrar num trabalho'),
-    el('button',{class:'big warn',style:'margin-top:10px', onclick:()=>{ state.intent='pert'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '⏸  Registar paragem'));
+    el('button',{class:'big warn',style:'margin-top:10px', onclick:()=>{ state.intent='pert'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '⏸  Registar paragem'),
+    el('button',{class:'big ghost',style:'margin-top:10px', onclick:()=>{ state._pf=''; state._pprog=null; state.view='planos'; render(); }}, '📄  Consultar planos'),
+    el('button',{class:'big ghost',style:'margin-top:10px', onclick:()=>{ state.intent='stock'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '🚛  Stock (motoristas)'));
   return cta; }
 
 /* ---- PIN ---- */
@@ -371,6 +376,7 @@ function confirmOp(){
   state.pendingOp=null; state.pinbuf='';
   if(state.intent==='pert'){ state.pertDraft={motivo:null}; state.view='pertmotivo'; }
   else if(state.intent==='jobaction'){ state.curJob=state.jobActionId; state.jobPhase='menu'; state.view='job'; }
+  else if(state.intent==='stock'){ state.smov=null; state._sopen=null; state._af=''; state.view='stockmap'; render(); loadStockMap().then(()=>{ if((state.view||'').indexOf('stock')===0) render(); }); return; }
   else { state.draft={ artigo:null, operacao:null, modo:'Encomenda', sel:[], stock:'' }; state._prog=null; state._af=''; state.view='artigo'; }
   render();
 }
@@ -475,7 +481,7 @@ function renderOperacao(w){
   const list=el('div',{class:'list'});
   if(!ops.length) list.append(el('div',{class:'empty'},'Sem operações para este artigo.'));
   for(const o of ops){
-    const obj=objetivoOperacao(o.operacao);
+    const obj=objetivoOperacao(o.operacao, state.draft.artigo);
     list.append(el('button',{class:'item',onclick:()=>{ state.draft.operacao=o.operacao; state.draft.unidade=o.unidade; state.view='series'; render(); }},
       el('span',{class:'t'}, el('b',{},o.operacao), el('small',{}, postoDaUnidade(o.unidade)+(obj?(' · objetivo '+obj):''))),
       el('span',{class:'chev'},'›')));
@@ -493,6 +499,121 @@ function verPlano(p){
   const base=(state.cfg&&state.cfg.urlPlanos)||'';
   const f=(p.ficheiro||'').replace(/\\/g,'/');
   if(base&&f) window.open(base+'&f='+encodeURIComponent(f),'_blank');
+  else toast('Planos indisponíveis neste dispositivo.','warn');
+}
+
+/* ---- CONSULTAR PLANOS (só consulta, sem iniciar operação) ---- */
+function renderPlanos(w){
+  w.append(backbar('board','Consultar planos'));
+  w.append(el('p',{class:'lbl'},'Procura por artigo, código ou tipologia — só consulta, não inicia trabalho.'));
+  w.append(el('input',{class:'search',placeholder:'Procurar plano…',value:state._pf||'',oninput:(e)=>{state._pf=e.target.value;fillPlanos();}}));
+  w.append(el('div',{class:'list',id:'planlist'}));
+  setTimeout(fillPlanos,0);
+}
+function itemPlano(p){
+  return el('button',{class:'item',onclick:()=>verPlano(p)},
+    el('span',{class:'t'}, el('b',{}, p.artigo), el('small',{}, (p.codigo||p.ficheiro||'')+(p.variante?(' · '+p.variante):'')+' · '+(p.programa||''))),
+    el('span',{class:'chev'},'📄'));
+}
+function fillPlanos(){
+  const list=$('#planlist'); if(!list)return; list.innerHTML='';
+  const f=(state._pf||'').toLowerCase().trim();
+  const planos=(state.cfg.planos||[]).filter(p=>p.estado==='OK');
+  const cmp=(a,b)=>(a.artigo||'').localeCompare(b.artigo||'');
+  if(f){
+    const r=planos.filter(p=>((p.artigo||'')+' '+(p.codigo||'')+' '+(p.programa||'')+' '+(p.variante||'')).toLowerCase().includes(f)).sort(cmp).slice(0,150);
+    if(!r.length){ list.append(el('div',{class:'empty'},'Sem planos.')); return; }
+    for(const p of r) list.append(itemPlano(p));
+    return;
+  }
+  if(!state._pprog){
+    const grupos={}; planos.forEach(p=>{ const g=p.programa||'Outros'; (grupos[g]=grupos[g]||[]).push(p); });
+    const nomes=Object.keys(grupos).sort();
+    if(!nomes.length){ list.append(el('div',{class:'empty'},'Sem planos.')); return; }
+    for(const g of nomes){ const n=grupos[g].length;
+      list.append(el('button',{class:'item',onclick:()=>{ state._pprog=g; fillPlanos(); }},
+        el('span',{class:'t'}, el('b',{},g), el('small',{}, n+' plano'+(n>1?'s':''))),
+        el('span',{class:'chev'},'›'))); }
+    return;
+  }
+  list.append(el('button',{class:'item',style:'opacity:.8',onclick:()=>{ state._pprog=null; fillPlanos(); }},
+    el('span',{class:'t'}, el('b',{},'‹ Tipologias')), el('span',{class:'chev'},'')));
+  const doP=planos.filter(p=>(p.programa||'Outros')===state._pprog).sort(cmp);
+  if(!doP.length){ list.append(el('div',{class:'empty'},'Sem planos nesta tipologia.')); return; }
+  for(const p of doP) list.append(itemPlano(p));
+}
+
+/* ============ #3 STOCK MOTORISTAS (mapa por artigo + entradas/saídas) ============ */
+LS.stockq='q_stock_queue'; LS.stockmap='q_stock_srv';
+function loadStockQ(){ try{return JSON.parse(localStorage.getItem(LS.stockq)||'[]');}catch(e){return[];} }
+function saveStockQ(q){ try{localStorage.setItem(LS.stockq,JSON.stringify(q));}catch(e){} }
+async function syncStockQ(){ const url=(state.cfg&&state.cfg.urlStock)||null; let q=loadStockQ(); if(!q.length||!url)return; const resto=[]; for(const reg of q){ if(reg.ID&&jaEnviado(reg.ID))continue; let ok=false; try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(reg)});ok=r.ok;}catch(e){ok=false;} if(ok)marcarEnviado(reg.ID); else resto.push(reg);} saveStockQ(resto); }
+async function loadStockMap(){ const url=(state.cfg&&state.cfg.urlStockLer)||null; if(!url)return; try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); if(r.ok){ let rows=await r.json(); if(!Array.isArray(rows))rows=(rows&&rows.value)||[]; localStorage.setItem(LS.stockmap,JSON.stringify(rows)); } }catch(e){} }
+function computeStock(){ let srv=[]; try{ srv=JSON.parse(localStorage.getItem(LS.stockmap)||'[]'); }catch(e){}
+  const rows=srv.concat(loadStockQ()); const last={};
+  rows.forEach(r=>{ const art=(r.Artigo||r.artigo||''); const se=String(r.NumSerie||r.numSerie||'').trim(); const mv=(r.Movimento||r.movimento||''); if(!se)return; last[art+'|'+se]={art,se,mv}; });
+  const map={}; Object.keys(last).forEach(k=>{ const x=last[k]; if(/entra/i.test(x.mv)){ (map[x.art]=map[x.art]||[]).push(x.se); } }); return map; }
+function progDoArtigo(a){ const x=(state.cfg.artigos||[]).find(y=>y.artigo===a); return x?(x.programa||''):''; }
+function renderStockMap(w){
+  w.append(backbar('board','Stock — '+curto(state.op.nome)));
+  w.append(el('div',{class:'cta',style:'position:static;padding:0 0 12px'},
+    el('button',{class:'big ok',onclick:()=>{ state.smov={tipo:'Entra',artigo:null,programa:null,sel:[],stock:''}; state._af=''; state.view='stockmov'; render(); }},'➕  Entra em stock'),
+    el('button',{class:'big warn',style:'margin-top:10px',onclick:()=>{ state.smov={tipo:'Sai',artigo:null,programa:null,sel:[],stock:''}; state._af=''; state.view='stockmov'; render(); }},'➖  Sai para ANN')));
+  const map=computeStock(); const arts=Object.keys(map).sort();
+  const total=arts.reduce((s,a)=>s+map[a].length,0);
+  w.append(el('p',{class:'lbl'}, 'Em stock agora — '+total+' caixa(s)'));
+  if(!arts.length){ w.append(el('div',{class:'empty'},'Sem caixas em stock.')); }
+  else { const list=el('div',{class:'list'});
+    arts.forEach(a=>{ const series=map[a].slice().sort(); const open=state._sopen===a;
+      list.append(el('button',{class:'item',onclick:()=>{ state._sopen= open?null:a; render(); }},
+        el('span',{class:'t'}, el('b',{},a), el('small',{}, series.length+' em stock'+(open?(' · '+series.join(' · ')):''))),
+        el('span',{class:'chev'}, open?'▾':'▸'))); });
+    w.append(list); }
+  const nq=loadStockQ().length; if(nq) w.append(el('div',{class:'chip',style:'margin-top:10px'}, nq+' movimento(s) por sincronizar'));
+}
+function renderStockMov(w){
+  const s=state.smov; const isSaida=s.tipo==='Sai';
+  w.append(backbar('stockmap', (isSaida?'Sair para ANN':'Entrar em stock')));
+  if(!s.artigo){
+    w.append(el('p',{class:'lbl'},'Que caixa?'));
+    w.append(el('input',{class:'search',placeholder:'Procurar artigo…',value:state._af||'',oninput:(e)=>{state._af=e.target.value;fillStockArt();}}));
+    w.append(el('div',{class:'list',id:'stockartlist'})); setTimeout(fillStockArt,0); return;
+  }
+  w.append(el('div',{class:'chip',style:'margin-bottom:8px'}, s.artigo+' · '+(s.programa||'')));
+  if(isSaida){
+    const inStock=(computeStock()[s.artigo]||[]).slice().sort();
+    w.append(el('p',{class:'lbl'},'Séries em stock — escolhe as que saem para ANN'));
+    if(!inStock.length) w.append(el('div',{class:'flag'},'Sem séries em stock para este artigo.'));
+    const list=el('div',{class:'list',style:'max-height:44vh;overflow:auto'});
+    inStock.forEach(se=>{ const on=s.sel.includes(se);
+      list.append(el('button',{class:'item',style:on?'border-color:var(--cy);background:#0f2831':'',onclick:()=>{ s.sel= on?s.sel.filter(x=>x!==se):[...s.sel,se]; render(); }},
+        el('span',{class:'pfx',style:on?'color:var(--cy)':'color:var(--faint)'}, on?'✓':'○'), el('span',{class:'t'}, el('b',{},se)))); });
+    w.append(list);
+    w.append(el('div',{class:'chip',style:'margin-top:10px'}, s.sel.length+' série(s)'));
+    w.append(el('button',{class:'big',style:'margin-top:12px',onclick:confirmStock},'➖  Registar saída para ANN'));
+  } else {
+    w.append(el('p',{class:'lbl'},'Nº de série que entra em stock (uma ou várias, separadas por espaço)'));
+    w.append(el('input',{class:'search',placeholder:'ex.: 12345 12346',value:s.stock||'',oninput:(e)=>{s.stock=e.target.value;}}));
+    w.append(el('button',{class:'big ok',style:'margin-top:12px',onclick:confirmStock},'➕  Registar entrada em stock'));
+  }
+}
+function fillStockArt(){ const list=$('#stockartlist'); if(!list)return; list.innerHTML='';
+  const f=(state._af||'').toLowerCase().trim(); const s=state.smov;
+  let base=[...artigosAtivos()].sort();
+  if(s.tipo==='Sai'){ base=Object.keys(computeStock()).sort(); }
+  const r=(f?base.filter(a=>a.toLowerCase().includes(f)):base).slice(0,150);
+  if(!r.length){ list.append(el('div',{class:'empty'},'Sem artigos.')); return; }
+  r.forEach(a=>{ list.append(el('button',{class:'item',onclick:()=>{ s.artigo=a; s.programa=progDoArtigo(a); s.sel=[]; render(); }},
+    el('span',{class:'t'}, el('b',{},a), el('small',{}, progDoArtigo(a))), el('span',{class:'chev'},'›'))); });
+}
+function confirmStock(){ const s=state.smov; let series=[];
+  if(s.tipo==='Sai'){ series=s.sel.slice(); if(!series.length){ toast('Escolhe pelo menos uma série','err'); return; } }
+  else { series=parseSeries(s.stock); if(!series.length){ toast('Indica o nº de série','err'); return; } }
+  const dh=new Date().toLocaleString('pt-PT'); const dia=dstr(nowTs()); const q=loadStockQ();
+  series.forEach(serie=>{ q.push({ ID:'ST-'+(state.op.pin||'x')+'-'+nowTs()+'-'+serie, Data:dia, Motorista:state.op.nome, Programa:s.programa||'', Artigo:s.artigo, NumSerie:serie, Movimento:s.tipo, Destino:(s.tipo==='Sai'?'ANN':''), DataHoraRegisto:dh }); });
+  saveStockQ(q); syncStockQ();
+  toast((s.tipo==='Sai'?'Saída':'Entrada')+' registada — '+series.length+' série(s)','ok');
+  state._sopen=s.artigo; state.smov=null; state.view='stockmap'; render();
 }
 
 /* ---- SÉRIES / MODO ---- */
@@ -634,7 +755,7 @@ function renderProxima(w){ const c=state.cont; if(!c){ state.view='board'; retur
     w.append(el('button',{class:'big',style:'margin-top:12px',onclick:()=>{state.cont=null;state.view='board';render();}},'Voltar ao quadro')); return; }
   w.append(el('p',{class:'lbl'},'Próxima operação — para AS MESMAS séries'));
   const list=el('div',{class:'list'});
-  rest.forEach(o=>{ const obj=objetivoOperacao(o.operacao);
+  rest.forEach(o=>{ const obj=objetivoOperacao(o.operacao, state.cont&&state.cont.artigo);
     list.append(el('button',{class:'item',onclick:()=>startContinuar(o)},
       el('span',{class:'t'}, el('b',{},o.operacao), el('small',{}, postoDaUnidade(o.unidade)+(obj?(' · objetivo '+obj):''))),
       el('span',{class:'chev'},'▶'))); });
@@ -693,7 +814,7 @@ async function syncPertQueue(){
     if(!ok)resto.push(reg); }
   savePertQ(resto);
 }
-setInterval(()=>{ try{ syncQueue(); syncPertQueue(); }catch(e){} }, 30000); // reenvia as filas automaticamente (quando a rede volta)
+setInterval(()=>{ try{ syncQueue(); syncPertQueue(); syncStockQ(); }catch(e){} }, 30000); // reenvia as filas automaticamente (quando a rede volta)
 
 /* ---- batimento para o painel ao vivo (andon). Inofensivo ate urlAtivos existir. ---- */
 function buildAtivos(){
@@ -756,7 +877,7 @@ setInterval(()=>{
   if(!state.cfg){ $('#app').innerHTML='<div class="wrap"><div class="empty">Não consegui carregar a configuração (config.json).</div></div>'; return; }
   state.enc=await loadEnc();
   state.view='board'; render();
-  window.addEventListener('online',syncQueue);
+  window.addEventListener('online',()=>{ syncQueue(); syncPertQueue(); syncStockQ(); });
 })();
 
 /* ---- Service Worker (offline) + aviso de versao nova ---- */
