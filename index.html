@@ -57,7 +57,17 @@
   .m .rsn{font-size:11.5px;color:var(--pause);margin-top:6px}
   .empty{color:var(--faint);text-align:center;padding:40px 0;font-style:italic}
 
-  .cta{position:sticky;bottom:0;padding:14px 16px;background:linear-gradient(0deg,var(--bg),transparent)}
+  /* quadro em 2 colunas: trabalhos à esquerda, ações à direita */
+  .boardlayout{flex:1;display:flex;align-items:stretch;min-height:0}
+  .boardlayout .wrap{flex:1;min-width:0;overflow:auto}
+  .cta{flex:none;width:300px;padding:16px;border-left:1px solid var(--line);align-self:stretch;
+    display:flex;flex-direction:column;gap:10px;background:linear-gradient(180deg,var(--panel),transparent)}
+  .cta .ctahd{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--soft);margin:2px 0 2px}
+  @media(max-width:760px){
+    .boardlayout{flex-direction:column}
+    .cta{width:auto;border-left:none;border-top:1px solid var(--line);position:sticky;bottom:0;background:linear-gradient(0deg,var(--bg),transparent)}
+    .cta .ctahd{display:none}
+  }
   .big{width:100%;background:linear-gradient(180deg,#1ec6df,#12a7bf);color:#04222a;border-radius:12px;padding:17px;
     font-size:17px;font-weight:800;display:flex;align-items:center;justify-content:center;gap:10px}
   .big.ghost{background:var(--card2);color:var(--ink);border:1px solid var(--line)}
@@ -80,6 +90,10 @@
   .item .pfx{font-family:var(--mono);font-size:11px;color:var(--cy);min-width:42px}
   .search{width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px 15px;color:var(--ink);font-size:16px;margin-bottom:12px}
   .chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;padding:5px 10px;border-radius:20px;border:1px solid var(--line);color:var(--soft)}
+  .autoinfo{display:flex;gap:10px;margin:2px 0 14px;flex-wrap:wrap}
+  .autoinfo .ai{flex:1;min-width:130px;background:var(--card);border:1px solid var(--line);border-left:3px solid var(--cy);border-radius:10px;padding:9px 12px}
+  .autoinfo .ai small{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:3px}
+  .autoinfo .ai b{font-size:14.5px;color:var(--ink)}
   .backbar{display:flex;align-items:center;gap:12px;margin-bottom:6px}
   .back{background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:9px 14px;font-size:14px;color:var(--soft)}
   .crumb{font-size:13px;color:var(--soft)}
@@ -207,6 +221,15 @@ function artigosDaArea(){ const ativos=new Set(artigosAtivos()); if(!state.area)
 function artigosAtivos(){ const c=state.cfg; const subst=new Set(c.artigos.filter(a=>a.substituidoPor).map(a=>a.artigo));
   return c.artigos.filter(a=>!a.substituidoPor).map(a=>a.artigo); }
 function operacoesDoArtigo(art){ return state.cfg.operacoes.filter(o=>o.artigos.includes(art)); }
+/* unidade FIXA do artigo (cada artigo tem 1 unidade de produção) — da operação principal, restrita à área do operador, preferindo montagem/produção a embalamento */
+function unidadeDoArtigo(art){
+  const ops=operacoesDoArtigo(art).filter(o=>!state.area||state.area.includes(o.unidade));
+  if(!ops.length) return '';
+  const cont={}; ops.forEach(o=>{ const u=o.unidade||''; if(u) cont[u]=(cont[u]||0)+1; });
+  const chaves=Object.keys(cont).sort((a,b)=>cont[b]-cont[a]);
+  const naoEmb=chaves.filter(u=>!/embalamento/i.test(u));
+  return naoEmb[0]||chaves[0]||'';
+}
 function planoDoArtigo(art){ // devolve o plano OK (default aéreo/único)
   const ps=state.cfg.planos.filter(p=>p.artigo===art && p.estado==='OK');
   if(!ps.length) return null;
@@ -287,8 +310,8 @@ function render(){
     w.append(el('div',{class:'flag'},'⚠️ Ocorreu um erro no ecrã. Os teus registos estão guardados.'));
     w.append(el('button',{class:'big',style:'margin-top:12px',onclick:()=>{ state.view='board'; state.draft=null; state.cont=null; state.op=null; state.pendingOp=null; state.jobPhase='menu'; render(); }},'Voltar ao quadro'));
   }
-  app.append(w);
-  if(state.view==='board') app.append(ctaBoard());
+  if(state.view==='board') app.append(el('div',{class:'boardlayout'}, w, ctaBoard()));
+  else app.append(w);
   if(state.toast) app.append(el('div',{class:'toast '+(state.toast.k||'')},state.toast.m));
 }
 function topbar(){
@@ -344,10 +367,11 @@ function renderBoard(w){
 }
 function ctaBoard(){
   const cta=el('div',{class:'cta'},
+    el('div',{class:'ctahd'},'Ações'),
     el('button',{class:'big', onclick:()=>{ state.intent='work'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '▶  Iniciar / entrar num trabalho'),
-    el('button',{class:'big warn',style:'margin-top:10px', onclick:()=>{ state.intent='pert'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '⏸  Registar paragem'),
-    el('button',{class:'big ghost',style:'margin-top:10px', onclick:()=>{ state._pf=''; state._pprog=null; state.view='planos'; render(); }}, '📄  Consultar planos'),
-    el('button',{class:'big ghost',style:'margin-top:10px', onclick:()=>{ state.intent='stock'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '🚛  Stock (motoristas)'));
+    el('button',{class:'big warn', onclick:()=>{ state.intent='pert'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '⏸  Registar paragem'),
+    el('button',{class:'big ghost', onclick:()=>{ state._pf=''; state._pprog=null; state.view='planos'; render(); }}, '📄  Consultar planos'),
+    el('button',{class:'big ghost', onclick:()=>{ state.intent='stock'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '🚛  Stock (motoristas)'));
   return cta; }
 
 /* ---- PIN ---- */
@@ -376,7 +400,9 @@ function confirmOp(){
   state.pendingOp=null; state.pinbuf='';
   if(state.intent==='pert'){ state.pertDraft={motivo:null}; state.view='pertmotivo'; }
   else if(state.intent==='jobaction'){ state.curJob=state.jobActionId; state.jobPhase='menu'; state.view='job'; }
-  else if(state.intent==='stock'){ state.smov=null; state._sopen=null; state._af=''; state.view='stockmap'; render(); loadStockMap().then(()=>{ if((state.view||'').indexOf('stock')===0) render(); }); return; }
+  else if(state.intent==='stock'){
+    if(!/transp/i.test((op.seccao||'')+' '+(op.unidade||''))){ toast('Só os motoristas (Transportes) têm acesso ao stock.','err'); state.op=null; state.view='board'; render(); return; }
+    state.smov=null; state._sopen=null; state._af=''; state.view='stockmap'; render(); loadStockMap().then(()=>{ if((state.view||'').indexOf('stock')===0) render(); }); return; }
   else { state.draft={ artigo:null, operacao:null, modo:'Encomenda', sel:[], stock:'' }; state._prog=null; state._af=''; state.view='artigo'; }
   render();
 }
@@ -430,8 +456,10 @@ function renderArtigo(w){
   setTimeout(fillArtigos,0);
 }
 function itemArtigo(a, programa){
-  return el('button',{class:'item',onclick:()=>{ state.draft.artigo=a; state.draft.programa=programa; state.view='operacao'; render(); }},
-    el('span',{class:'t'}, el('b',{},a), el('small',{}, programa||'')),
+  const uni=unidadeDoArtigo(a);
+  const sub=[programa||'', uni?postoDaUnidade(uni):''].filter(Boolean).join(' · ');
+  return el('button',{class:'item',onclick:()=>{ state.draft.artigo=a; state.draft.programa=programa; state.draft.unidade=uni; state.view='operacao'; render(); }},
+    el('span',{class:'t'}, el('b',{},a), el('small',{}, sub)),
     el('span',{class:'chev'},'›'));
 }
 function fillArtigos(){
@@ -474,6 +502,11 @@ function fillArtigos(){
 /* ---- ESCOLHER OPERAÇÃO ---- */
 function renderOperacao(w){
   w.append(backbar('artigo', state.draft.artigo));
+  // tipo de caixa + unidade — automáticos a partir do artigo
+  const uAuto=state.draft.unidade||unidadeDoArtigo(state.draft.artigo);
+  w.append(el('div',{class:'autoinfo'},
+    el('span',{class:'ai'}, el('small',{},'Tipo de caixa'), el('b',{}, state.draft.programa||'—')),
+    el('span',{class:'ai'}, el('small',{},'Unidade de produção'), el('b',{}, uAuto?postoDaUnidade(uAuto):'—'))));
   const plano=planoDoArtigo(state.draft.artigo);
   if(plano) w.append(planobar(plano)); else w.append(el('div',{class:'flag'},'Sem plano associado a este artigo.'));
   w.append(el('p',{class:'lbl'},'Que operação?'));
@@ -560,16 +593,28 @@ function renderStockMap(w){
     el('button',{class:'big ok',onclick:()=>{ state.smov={tipo:'Entra',artigo:null,programa:null,sel:[],stock:''}; state._af=''; state.view='stockmov'; render(); }},'➕  Entra em stock'),
     el('button',{class:'big warn',style:'margin-top:10px',onclick:()=>{ state.smov={tipo:'Sai',artigo:null,programa:null,sel:[],stock:''}; state._af=''; state.view='stockmov'; render(); }},'➖  Sai para ANN')));
   const map=computeStock(); const arts=Object.keys(map).sort();
-  const total=arts.reduce((s,a)=>s+map[a].length,0);
+  const nDe=(a)=> porQuantidade(progDoArtigo(a)) ? stockQtdArtigo(a) : map[a].length;
+  const total=arts.reduce((s,a)=>s+nDe(a),0);
   w.append(el('p',{class:'lbl'}, 'Em stock agora — '+total+' caixa(s)'));
   if(!arts.length){ w.append(el('div',{class:'empty'},'Sem caixas em stock.')); }
   else { const list=el('div',{class:'list'});
-    arts.forEach(a=>{ const series=map[a].slice().sort(); const open=state._sopen===a;
-      list.append(el('button',{class:'item',onclick:()=>{ state._sopen= open?null:a; render(); }},
-        el('span',{class:'t'}, el('b',{},a), el('small',{}, series.length+' em stock'+(open?(' · '+series.join(' · ')):''))),
-        el('span',{class:'chev'}, open?'▾':'▸'))); });
+    arts.forEach(a=>{ const n=nDe(a); if(n<=0) return; const qtd=porQuantidade(progDoArtigo(a)); const series=qtd?[]:map[a].slice().sort(); const open=state._sopen===a;
+      list.append(el('button',{class:'item',onclick:()=>{ if(qtd)return; state._sopen= open?null:a; render(); }},
+        el('span',{class:'t'}, el('b',{},a), el('small',{}, n+' em stock'+(!qtd&&open?(' · '+series.join(' · ')):''))),
+        el('span',{class:'chev'}, qtd?'':(open?'▾':'▸')))); });
     w.append(list); }
   const nq=loadStockQ().length; if(nq) w.append(el('div',{class:'chip',style:'margin-top:10px'}, nq+' movimento(s) por sincronizar'));
+}
+// Caixas contadas por QUANTIDADE (sem nº de série): Praetor-caixas (Ailerons, Porta Carga/Rat, Spoilers) e Cxs sobras (Maquinação)
+function porQuantidade(prog){ return /praetor-caixas|maquinac/i.test(prog||''); }
+// Quantidade líquida em stock de um artigo por-quantidade (entradas − saídas)
+function stockQtdArtigo(artigo){
+  let srv=[]; try{ srv=JSON.parse(localStorage.getItem(LS.stockmap)||'[]'); }catch(e){}
+  let net=0;
+  srv.concat(loadStockQ()).forEach(r=>{ if((r.Artigo||r.artigo)!==artigo) return;
+    const q=parseInt(String(r.NumSerie||r.numSerie||'').replace(/[^\d]/g,''))||0;
+    net += /entra/i.test(r.Movimento||r.movimento||'') ? q : -q; });
+  return Math.max(0,net);
 }
 function renderStockMov(w){
   const s=state.smov; const isSaida=s.tipo==='Sai';
@@ -580,6 +625,18 @@ function renderStockMov(w){
     w.append(el('div',{class:'list',id:'stockartlist'})); setTimeout(fillStockArt,0); return;
   }
   w.append(el('div',{class:'chip',style:'margin-bottom:8px'}, s.artigo+' · '+(s.programa||'')));
+  // Caixa por QUANTIDADE (sem série) → pedir nº de caixas
+  if(porQuantidade(s.programa)){
+    if(isSaida){
+      const atual=stockQtdArtigo(s.artigo);
+      w.append(el('p',{class:'lbl'},'Quantas caixas saem para ANN?  (em stock: '+atual+')'));
+    } else {
+      w.append(el('p',{class:'lbl'},'Quantas caixas entram em stock?'));
+    }
+    w.append(el('input',{class:'search',type:'number',min:'1',inputmode:'numeric',placeholder:'nº de caixas',value:s.qtd||'',oninput:(e)=>{s.qtd=e.target.value;}}));
+    w.append(el('button',{class:'big'+(isSaida?'':' ok'),style:'margin-top:12px',onclick:confirmStock}, (isSaida?'➖  Registar saída para ANN':'➕  Registar entrada em stock')));
+    return;
+  }
   if(isSaida){
     const inStock=(computeStock()[s.artigo]||[]).slice().sort();
     w.append(el('p',{class:'lbl'},'Séries em stock — escolhe as que saem para ANN'));
@@ -606,7 +663,19 @@ function fillStockArt(){ const list=$('#stockartlist'); if(!list)return; list.in
   r.forEach(a=>{ list.append(el('button',{class:'item',onclick:()=>{ s.artigo=a; s.programa=progDoArtigo(a); s.sel=[]; render(); }},
     el('span',{class:'t'}, el('b',{},a), el('small',{}, progDoArtigo(a))), el('span',{class:'chev'},'›'))); });
 }
-function confirmStock(){ const s=state.smov; let series=[];
+function confirmStock(){ const s=state.smov;
+  // Caixa por QUANTIDADE → um movimento com NumSerie = nº de caixas
+  if(porQuantidade(s.programa)){
+    const qn=parseInt(String(s.qtd||'').replace(/[^\d]/g,''))||0;
+    if(qn<=0){ toast('Indica a quantidade','err'); return; }
+    if(s.tipo==='Sai'){ const atual=stockQtdArtigo(s.artigo); if(qn>atual){ toast('Só há '+atual+' em stock','err'); return; } }
+    const dh=new Date().toLocaleString('pt-PT'); const dia=dstr(nowTs()); const q=loadStockQ();
+    q.push({ ID:'STQ-'+(state.op.pin||'x')+'-'+nowTs()+'-'+s.artigo.replace(/\W/g,'').slice(0,12), Data:dia, Motorista:state.op.nome, Programa:s.programa||'', Artigo:s.artigo, NumSerie:String(qn), Movimento:s.tipo, Destino:(s.tipo==='Sai'?'ANN':''), DataHoraRegisto:dh });
+    saveStockQ(q); syncStockQ();
+    toast((s.tipo==='Sai'?'Saída':'Entrada')+' registada — '+qn+' caixa(s)','ok');
+    state._sopen=s.artigo; state.smov=null; state.view='stockmap'; render(); return;
+  }
+  let series=[];
   if(s.tipo==='Sai'){ series=s.sel.slice(); if(!series.length){ toast('Escolhe pelo menos uma série','err'); return; } }
   else { series=parseSeries(s.stock); if(!series.length){ toast('Indica o nº de série','err'); return; } }
   const dh=new Date().toLocaleString('pt-PT'); const dia=dstr(nowTs()); const q=loadStockQ();
