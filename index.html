@@ -290,6 +290,7 @@ function render(){
     else if(state.view==='planos') renderPlanos(w);
     else if(state.view==='stockmap') renderStockMap(w);
     else if(state.view==='stockmov') renderStockMov(w);
+    else if(state.view==='meustrab') renderMeusTrabalhos(w);
     else if(state.view==='fecharAntigos') renderFecharAntigos(w);
     else if(state.view==='operacao') renderOperacao(w);
     else if(state.view==='series') renderSeries(w);
@@ -371,18 +372,19 @@ function ctaBoard(){
     el('button',{class:'big', onclick:()=>{ state.intent='work'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '▶  Iniciar / entrar num trabalho'),
     el('button',{class:'big warn', onclick:()=>{ state.intent='pert'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '⏸  Registar paragem'),
     el('button',{class:'big ghost', onclick:()=>{ state._pf=''; state._pprog=null; state.view='planos'; render(); }}, '📄  Consultar planos'),
-    el('button',{class:'big ghost', onclick:()=>{ state.intent='stock'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '🚛  Stock (motoristas)'));
+    el('button',{class:'big ghost', onclick:()=>{ state.intent='stock'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '🚛  Stock (motoristas)'),
+    el('button',{class:'big ghost', onclick:()=>{ state.intent='meustrab'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '📋  Os meus trabalhos abertos'));
   return cta; }
 
 /* ---- FECHAR TRABALHOS ANTIGOS (dias anteriores esquecidos em aberto) ---- */
 function jobsAntigos(){ const hoje=dstr(nowTs()); return state.jobs.filter(j=>j.status!=='done' && j.dia && j.dia!==hoje); }
 function fecharJobAntigo(id){ const j=state.jobs.find(x=>x.id===id); if(!j) return;
   (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } });
-  j.status='done'; save();
+  j.status='done'; save(); pushTrabAberto(j,'fechado');
   toast('Trabalho fechado','ok');
   state.view = jobsAntigos().length ? 'fecharAntigos' : 'board'; render();
 }
-function fecharTodosAntigos(){ jobsAntigos().forEach(j=>{ (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } }); j.status='done'; });
+function fecharTodosAntigos(){ jobsAntigos().forEach(j=>{ (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } }); j.status='done'; pushTrabAberto(j,'fechado'); });
   save(); toast('Trabalhos antigos fechados','ok'); state.view='board'; render();
 }
 function renderFecharAntigos(w){
@@ -435,6 +437,7 @@ function confirmOp(){
   else if(state.intent==='stock'){
     if(!/transp/i.test((op.seccao||'')+' '+(op.unidade||''))){ toast('Só os motoristas (Transportes) têm acesso ao stock.','err'); state.op=null; state.view='board'; render(); return; }
     state.smov=null; state._sopen=null; state._af=''; state.view='stockmap'; render(); loadStockMap().then(()=>{ if((state.view||'').indexOf('stock')===0) render(); }); return; }
+  else if(state.intent==='meustrab'){ state.view='meustrab'; render(); loadMeusTrab().then(()=>{ if(state.view==='meustrab') render(); }); return; }
   else { state.draft={ artigo:null, operacao:null, modo:'Encomenda', sel:[], stock:'' }; state._prog=null; state._af=''; state.view='artigo'; }
   render();
 }
@@ -762,11 +765,11 @@ function startJob(){
   const worker={ op:state.op.nome, opCurto:curto(state.op.nome), pin:state.op.pin, startTs:nowTs(), pauses:[], status:'running', endTs:null };
   if(existing){
     if(existing.workers.some(x=>x.pin===state.op.pin && !x.endTs)){ toast('Já estás neste trabalho','err'); state.view='board'; render(); return; }
-    existing.workers.push(worker); save(); toast('Juntaste-te à equipa ('+jobWorkersAtivos(existing).length+' operadores)','ok'); state.view='board'; render(); return;
+    existing.workers.push(worker); save(); pushTrabAberto(existing,'aberto'); toast('Juntaste-te à equipa ('+jobWorkersAtivos(existing).length+' operadores)','ok'); state.view='board'; render(); return;
   }
   const j={ id:'J'+Date.now(), artigo:d.artigo, programa:d.programa, operacao:d.operacao, unidade:d.unidade,
     modo:d.modo, series, plano:(planoDoArtigo(d.artigo)||{}).codigo||'', dia:dstr(nowTs()), status:'open', workers:[worker] };
-  state.jobs.push(j); save(); toast('Trabalho iniciado','ok'); state.view='board'; render();
+  state.jobs.push(j); save(); pushTrabAberto(j,'aberto'); toast('Trabalho iniciado','ok'); state.view='board'; render();
 }
 
 /* ---- DETALHE / PAUSA / FIM ---- */
@@ -834,7 +837,7 @@ function finishJob(j){
   enqueueRegisto(j, myW, true);                          // regista o meu tempo (a caixa nunca é concluída aqui)
   if(opConcluida){
     j.status='done'; guiado(j,{nome:(state.op?state.op.nome:''),pin:(state.op?state.op.pin:'')});
-    save(); toast('Operação concluída e guardada','ok'); state.jobPhase='menu'; state.view='proxima'; render();
+    save(); pushTrabAberto(j,'fechado'); toast('Operação concluída e guardada','ok'); state.jobPhase='menu'; state.view='proxima'; render();
   } else {
     const faltam = j.workers.filter(w=>!w.endTs).length;
     save(); toast('A tua parte foi concluída. Falta(m) '+faltam+' colega(s) nesta operação.','ok'); state.jobPhase='menu'; state.view='board'; render();
@@ -846,7 +849,7 @@ function startContinuar(o){ const c=state.cont;
   const worker={ op:opObj.nome, opCurto:curto(opObj.nome), pin:opObj.pin||'', startTs:nowTs(), pauses:[], status:'running', endTs:null };
   const j={ id:'J'+Date.now(), artigo:c.artigo, programa:c.programa, operacao:o.operacao, unidade:o.unidade, modo:c.modo,
     series:c.series.slice(), plano:(planoDoArtigo(c.artigo)||{}).codigo||'', dia:dstr(nowTs()), status:'open', workers:[worker] };
-  state.jobs.push(j); save(); toast('Operação seguinte iniciada','ok'); state.view='board'; render(); }
+  state.jobs.push(j); save(); pushTrabAberto(j,'aberto'); toast('Operação seguinte iniciada','ok'); state.view='board'; render(); }
 function renderProxima(w){ const c=state.cont; if(!c){ state.view='board'; return renderBoard(w); }
   w.append(el('div',{class:'backbar'}, el('button',{class:'back',onclick:()=>{state.cont=null;state.view='board';render();}},'‹ Ao quadro')));
   w.append(el('h2',{},'✓ '+(state.lastOp||'Operação')+' — terminada'));
@@ -942,6 +945,58 @@ var _hbT=null;
 function agendarBatimento(){ clearTimeout(_hbT); _hbT=setTimeout(enviarBatimento,1500); }
 setInterval(enviarBatimento, 20000); // mantem o painel fresco enquanto ha trabalho
 
+/* ---- Trabalhos abertos -> nuvem (Painel persistente + encerrar entre aparelhos) ---- */
+async function pushTrabAberto(j, estado){
+  const url=(state.cfg && state.cfg.urlTrabAbertos)||null; if(!url||!j) return;
+  const nomes=[...new Set((j.workers||[]).map(w=>w.opCurto||curto(w.op||'')).filter(Boolean))].join(', ');
+  const pins=[...new Set((j.workers||[]).map(w=>String(w.pin||'')).filter(Boolean))].join(',');
+  const rec={ ID:deviceName()+'|'+j.id, Dispositivo:deviceName(), JobID:String(j.id), Data:j.dia||dstr(nowTs()),
+    Programa:j.programa||'', Artigo:j.artigo||'', Operacao:j.operacao||'', Unidade:j.unidade||'',
+    Series:(j.series||[]).join(' · '), Operadores:nomes, Pins:pins, Estado:estado, DataHoraRegisto:new Date().toLocaleString('pt-PT') };
+  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(rec)}); }catch(e){}
+}
+function syncTrabAbertos(){ (state.jobs||[]).forEach(j=>{ if(j.status!=='done') pushTrabAberto(j,'aberto'); }); }
+async function reconcileTrabAbertos(){
+  const url=(state.cfg && state.cfg.urlTrabAbertosLer)||null; if(!url) return;
+  try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); const jj=await r.json(); const rows=jj.value||jj.linhas||(Array.isArray(jj)?jj:[]);
+    const est={}; rows.forEach(x=>{ if(x.ID) est[String(x.ID)]=String(x.Estado||''); });   // ordem da tabela = cronológica → fica o último estado
+    let mudou=false;
+    (state.jobs||[]).forEach(j=>{ if(j.status!=='done'){ const id=deviceName()+'|'+j.id; if(est[id]==='fechado'||est[id]==='fechar'){ (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } }); j.status='done'; mudou=true; } } });
+    if(mudou){ save(); if(state.view==='board') render(); }
+  }catch(e){}
+}
+setInterval(syncTrabAbertos, 60000);
+setInterval(reconcileTrabAbertos, 30000);
+
+/* ---- "Os meus trabalhos abertos" (encerrar a partir de qualquer aparelho) ---- */
+let _meusTrab=[];
+async function loadMeusTrab(){
+  _meusTrab=[]; const url=(state.cfg && state.cfg.urlTrabAbertosLer)||null; if(!url||!state.op) return;
+  try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); const jj=await r.json(); const rows=jj.value||jj.linhas||(Array.isArray(jj)?jj:[]);
+    const last={}; rows.forEach(x=>{ if(x.ID) last[String(x.ID)]=x; });
+    const meuPin=String(state.op.pin);
+    _meusTrab=Object.values(last).filter(x=>String(x.Estado||'')==='aberto' && String(x.Pins||'').split(',').map(s=>s.trim()).includes(meuPin));
+  }catch(e){}
+}
+async function fecharTrabRemoto(row){
+  const url=(state.cfg && state.cfg.urlTrabAbertos)||null; if(!url) return;
+  const rec={ ID:String(row.ID), Dispositivo:String(row.Dispositivo||''), JobID:String(row.JobID||''), Data:String(row.Data||''), Programa:String(row.Programa||''), Artigo:String(row.Artigo||''), Operacao:String(row.Operacao||''), Unidade:String(row.Unidade||''), Series:String(row.Series||''), Operadores:String(row.Operadores||''), Pins:String(row.Pins||''), Estado:'fechado', DataHoraRegisto:new Date().toLocaleString('pt-PT') };
+  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(rec)}); }catch(e){}
+}
+function renderMeusTrabalhos(w){
+  w.append(backbar('board','Os meus trabalhos abertos — '+curto(state.op.nome)));
+  const meus=_meusTrab.filter(x=>String(x.Dispositivo||'')!==deviceName());   // os deste aparelho fecham-se no quadro normal
+  if(!meus.length){ w.append(el('div',{class:'empty'},'Não tens trabalhos abertos noutros aparelhos.')); return; }
+  w.append(el('p',{class:'muted'},'Trabalhos que deixaste abertos noutro aparelho (ex.: no quiosque da fábrica). Encerra-os aqui.'));
+  const list=el('div',{class:'list'});
+  meus.forEach(x=>{
+    list.append(el('div',{class:'item',style:'align-items:center;gap:10px'},
+      el('span',{class:'t'}, el('b',{}, x.Artigo||'—'), el('small',{}, (x.Dispositivo||'')+' · '+(x.Operacao||''))),
+      el('button',{class:'big ok',style:'width:auto;margin:0;padding:10px 16px;flex:none',onclick:async()=>{ await fecharTrabRemoto(x); toast('Trabalho encerrado','ok'); await loadMeusTrab(); render(); }},'Encerrar')));
+  });
+  w.append(list);
+}
+
 /* ---- helpers UI ---- */
 function backbar(to,title){ return el('div',{class:'backbar'},
   el('button',{class:'back',onclick:()=>{ if(to==='board'){state.view='board';} else {state.view=to;} render(); }},'‹ Voltar'),
@@ -979,6 +1034,15 @@ setInterval(()=>{
   state.enc=await loadEnc();
   state.view='board'; render();
   window.addEventListener('online',()=>{ syncQueue(); syncPertQueue(); syncStockQ(); });
+})();
+
+/* ---- Wake Lock: manter o ecrã aceso (telemóveis não auto-bloqueiam → continuam a enviar batimento e ficam visíveis no Painel) ---- */
+(function(){
+  let wl=null;
+  async function pedir(){ try{ if('wakeLock' in navigator && document.visibilityState==='visible'){ wl=await navigator.wakeLock.request('screen'); } }catch(e){} }
+  document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'){ pedir(); if(typeof enviarBatimento==='function') enviarBatimento(); } });
+  document.addEventListener('click',()=>{ if(!wl || wl.released) pedir(); }, {passive:true});
+  pedir();
 })();
 
 /* ---- Service Worker (offline) + aviso de versao nova ---- */
