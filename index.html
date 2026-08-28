@@ -207,13 +207,7 @@ async function loadEnc(){
   const c=localStorage.getItem('q_enc_cache'); return c?JSON.parse(c):[];
 }
 /* área do operador -> unidades de operação permitidas */
-function areaUnidades(op){ if(!op) return null; const u=op.unidade||''; const s=(op.seccao||'').toLowerCase();
-  if(op.unidades && op.unidades.length) return op.unidades;      // lista explicita por operador (prioridade)
-  if(s.indexOf('soldad')>=0) return [u+'-Soldadura'];
-  if(s.indexOf('fra')>=0) return ['Évora 2-Montagem'];           // Frações -> Produção de fracções
-  if(s.indexOf('montag')>=0){ if(u.indexOf('2')>=0) return ['Évora 2-Montagem']; return ['Evora1-Montagem','Evora1-Embalamento']; }
-  if(s.indexOf('transp')>=0) return ['Transportes'];
-  return null; /* null = sem filtro (ex.: Geral) */ }
+function areaUnidades(op){ return null; }   // TODOS podem fazer qualquer unidade → sem filtro (stock é check à parte por Transportes)
 function artigosDaArea(){ const ativos=new Set(artigosAtivos()); if(!state.area) return ativos;
   const set=new Set(); state.cfg.operacoes.forEach(o=>{ if(state.area.includes(o.unidade)) o.artigos.forEach(a=>{ if(ativos.has(a)) set.add(a); }); }); return set; }
 
@@ -296,6 +290,7 @@ function render(){
     else if(state.view==='planos') renderPlanos(w);
     else if(state.view==='stockmap') renderStockMap(w);
     else if(state.view==='stockmov') renderStockMov(w);
+    else if(state.view==='fecharAntigos') renderFecharAntigos(w);
     else if(state.view==='operacao') renderOperacao(w);
     else if(state.view==='series') renderSeries(w);
     else if(state.view==='job') renderJob(w);
@@ -317,7 +312,12 @@ function render(){
 function topbar(){
   const q=loadQueue().length;
   return el('div',{class:'topbar'},
-    el('div',{class:'area'}, el('span',{class:'pip'}), 'PRODUÇÃO'),
+    el('div',{class:'area', style:'user-select:none',   // toque LONGO (~1,5s) = acesso do supervisor (escondido dos operadores)
+      onpointerdown:()=>{ clearTimeout(window.__supLP); window.__supLP=setTimeout(()=>{ state.intent='fecharAntigos'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }, 1500); },
+      onpointerup:()=>{ clearTimeout(window.__supLP); },
+      onpointerleave:()=>{ clearTimeout(window.__supLP); },
+      onpointercancel:()=>{ clearTimeout(window.__supLP); }
+    }, el('span',{class:'pip'}), 'PRODUÇÃO'),
     el('div',{class:'right'},
       el('div',{}, el('div',{class:'clock',id:'clk'}, hhmm(nowTs())), el('div',{class:'sub'}, dstr(nowTs()))),
       el('div',{class:'sync '+(q?'off':'on')}, el('span',{class:'d'}), q?('por sincronizar ('+q+')'):'sincronizado')
@@ -329,7 +329,7 @@ function renderBoard(w){
   w.append(el('h2',{},'Trabalhos a decorrer'));
   w.append(el('p',{class:'muted'},'Toca num trabalho para o abrir.'));
   const openOld = state.jobs.filter(j=>j.status!=='done' && j.dia!==dstr(nowTs()));
-  if(openOld.length) w.append(el('div',{class:'flag'},'⚠️ '+openOld.length+' trabalho(s) de dias anteriores ainda abertos — entra e conclui ou pára.'));
+  // (aviso de trabalhos antigos removido do quadro — só o supervisor acede, por toque longo no cabeçalho)
   // paragens gerais a decorrer
   if(state.perts.length){
     w.append(el('p',{class:'lbl',style:'margin-top:0;color:var(--pause)'},'⏸ Paragens a decorrer'));
@@ -374,6 +374,33 @@ function ctaBoard(){
     el('button',{class:'big ghost', onclick:()=>{ state.intent='stock'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '🚛  Stock (motoristas)'));
   return cta; }
 
+/* ---- FECHAR TRABALHOS ANTIGOS (dias anteriores esquecidos em aberto) ---- */
+function jobsAntigos(){ const hoje=dstr(nowTs()); return state.jobs.filter(j=>j.status!=='done' && j.dia && j.dia!==hoje); }
+function fecharJobAntigo(id){ const j=state.jobs.find(x=>x.id===id); if(!j) return;
+  (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } });
+  j.status='done'; save();
+  toast('Trabalho fechado','ok');
+  state.view = jobsAntigos().length ? 'fecharAntigos' : 'board'; render();
+}
+function fecharTodosAntigos(){ jobsAntigos().forEach(j=>{ (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } }); j.status='done'; });
+  save(); toast('Trabalhos antigos fechados','ok'); state.view='board'; render();
+}
+function renderFecharAntigos(w){
+  w.append(backbar('board','Trabalhos por fechar'));
+  const antigos=jobsAntigos().sort((a,b)=>(a.dia||'').localeCompare(b.dia||''));
+  if(!antigos.length){ w.append(el('div',{class:'empty'},'Nada por fechar. 👍')); return; }
+  w.append(el('p',{class:'muted'},'Trabalhos de dias anteriores esquecidos em aberto. "Fechar" tira-os do quadro — as sessões já registadas mantêm-se e NÃO se inventam horas. As correções de horas fazem-se no Supervisor.'));
+  const list=el('div',{class:'list'});
+  antigos.forEach(j=>{
+    const nomes=[...new Set((j.workers||[]).map(x=>x.opCurto).filter(Boolean))].join(', ')||'—';
+    list.append(el('div',{class:'item',style:'align-items:center;gap:10px'},
+      el('span',{class:'t'}, el('b',{}, j.artigo), el('small',{}, (j.dia||'?')+' · '+j.operacao+' · '+nomes)),
+      el('button',{class:'big danger',style:'width:auto;margin:0;padding:10px 16px;flex:none',onclick:()=>{ if(confirm('Fechar este trabalho?\n\n'+(j.dia||'')+' · '+j.artigo+'\n'+j.operacao+'\n\nSai do quadro. Correções de horas → Supervisor.')) fecharJobAntigo(j.id); }},'Fechar')));
+  });
+  w.append(list);
+  w.append(el('button',{class:'big danger',style:'margin-top:14px',onclick:()=>{ if(confirm('Fechar TODOS os '+antigos.length+' trabalhos antigos?\n\nSaem todos do quadro. Correções de horas → Supervisor.')) fecharTodosAntigos(); }},'🧹  Fechar todos ('+antigos.length+')'));
+}
+
 /* ---- PIN ---- */
 function renderPin(w){
   w.append(backbar('board','Identifica-te'));
@@ -389,7 +416,12 @@ function renderPin(w){
   pad.append(el('button',{class:'key ok',onclick:()=>press('ok')},'✓'));
   w.append(pad);
 }
+const PIN_SUPERVISOR = '2025';   // só o supervisor pode fechar trabalhos antigos
 function tryLogin(){
+  if(state.intent==='fecharAntigos'){   // ação de supervisor, não dos operadores
+    if(String(state.pinbuf)===PIN_SUPERVISOR){ state.pinbuf=''; state.intent=null; state.view='fecharAntigos'; render(); return; }
+    toast('Só o supervisor pode fechar trabalhos.','err'); state.pinbuf=''; render(); return;
+  }
   const op=state.cfg.operadores.find(o=>String(o.pin)===String(state.pinbuf));
   if(!op){ toast('PIN não reconhecido','err'); state.pinbuf=''; render(); return; }
   state.pendingOp=op; state.view='confirma'; render();
