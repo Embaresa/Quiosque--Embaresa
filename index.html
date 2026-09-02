@@ -932,9 +932,21 @@ function buildAtivos(){
     desdeMin:Math.floor((nowTs()-p.startTs)/60000), estado:'pausa' }); });
   return out;
 }
+// garante que o aparelho TEM nome (do ?d= ou perguntando 1x) — evita ficar "Sem nome" e perder a identidade
+function ensureDeviceName(){
+  try{ const p=new URLSearchParams(location.search).get('d'); if(p&&p.trim()){ localStorage.setItem('q_dispositivo',p.trim()); return; } }catch(e){}
+  if(!localStorage.getItem('q_dispositivo')){
+    let n=null; try{ n=prompt('Qual é o nome deste aparelho?\n(ex.: Portatil-E2, Zebra, Monitor-Fracoes)',''); }catch(e){}
+    if(n && n.trim()) localStorage.setItem('q_dispositivo', n.trim());
+  }
+}
 function deviceName(){
   try{ const p=new URLSearchParams(location.search).get('d'); if(p){ localStorage.setItem('q_dispositivo',p); return p; } }catch(e){}
-  return localStorage.getItem('q_dispositivo') || 'Sem nome';
+  // Sem nome guardado, cada aparelho fica com um proprio: com "Sem nome" para todos,
+  // varios telemoveis partilhavam a mesma identidade no Painel.
+  let n=localStorage.getItem('q_dispositivo');
+  if(!n){ n='Aparelho-'+Math.random().toString(36).slice(2,6).toUpperCase(); try{ localStorage.setItem('q_dispositivo',n); }catch(e){} }
+  return n;
 }
 async function enviarBatimento(){
   const url=(state.cfg && state.cfg.urlAtivos)||null; if(!url) return; // sem fluxo definido -> nao envia
@@ -946,23 +958,114 @@ function agendarBatimento(){ clearTimeout(_hbT); _hbT=setTimeout(enviarBatimento
 setInterval(enviarBatimento, 20000); // mantem o painel fresco enquanto ha trabalho
 
 /* ---- Trabalhos abertos -> nuvem (Painel persistente + encerrar entre aparelhos) ---- */
-async function pushTrabAberto(j, estado){
-  const url=(state.cfg && state.cfg.urlTrabAbertos)||null; if(!url||!j) return;
+
+// Um trabalho FECHADO fica fechado.
+// Antes valia "a última linha da tabela ganha": bastava o reenvio automático chegar
+// depois do "Encerrar" do Supervisor para o trabalho voltar a abrir — e voltava
+// sempre, porque o reenvio repetia-se de minuto a minuto.
+function trabFechados(){ try{ return JSON.parse(localStorage.getItem('q_trab_fechados')||'[]'); }catch(e){ return []; } }
+function jaFechado(id){ return trabFechados().indexOf(String(id))!==-1; }
+function marcarTrabFechado(id){ try{ const s=trabFechados(); if(s.indexOf(String(id))===-1){ s.push(String(id)); localStorage.setItem('q_trab_fechados', JSON.stringify(s.slice(-400))); } }catch(e){} }
+
+// Fechos que não chegaram à nuvem (sem rede) — ficam em fila e voltam a ser tentados.
+function filaFechos(){ try{ return JSON.parse(localStorage.getItem('q_trab_fila_fecho')||'[]'); }catch(e){ return []; } }
+function guardarFilaFechos(a){ try{ localStorage.setItem('q_trab_fila_fecho', JSON.stringify(a.slice(-200))); }catch(e){} }
+
+// Só se escreve quando alguma coisa muda de facto. O reenvio de minuto a minuto
+// enchia a tabela (um aparelho escreveu 2241 linhas em dois dias) e empurrava-a
+// para lá das linhas que o fluxo de leitura consegue devolver — a partir daí
+// ninguém mais via os fechos e os trabalhos reapareciam para sempre.
+var _trabSig = {};
+function trabAssinatura(j, estado){
+  return [estado, j.dia||'', j.artigo||'', j.operacao||'', (j.series||[]).join('·'),
+          (j.workers||[]).map(w=>(w.opCurto||'')+':'+(w.endTs?'fim':(w.status||''))).join(',')].join('|');
+}
+function trabRec(j, estado){
   const nomes=[...new Set((j.workers||[]).map(w=>w.opCurto||curto(w.op||'')).filter(Boolean))].join(', ');
   const pins=[...new Set((j.workers||[]).map(w=>String(w.pin||'')).filter(Boolean))].join(',');
-  const rec={ ID:deviceName()+'|'+j.id, Dispositivo:deviceName(), JobID:String(j.id), Data:j.dia||dstr(nowTs()),
+  return { ID:deviceName()+'|'+j.id, Dispositivo:deviceName(), JobID:String(j.id), Data:j.dia||dstr(nowTs()),
     Programa:j.programa||'', Artigo:j.artigo||'', Operacao:j.operacao||'', Unidade:j.unidade||'',
-    Series:(j.series||[]).join(' · '), Operadores:nomes, Pins:pins, Estado:estado, DataHoraRegisto:new Date().toLocaleString('pt-PT') };
-  try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(rec)}); }catch(e){}
+    Series:(j.modo==='Stock'?'STOCK · ':'')+(j.series||[]).join(' · '),   // o modo não tem coluna própria; vai no prefixo
+    Operadores:nomes, Pins:pins, Estado:estado, DataHoraRegisto:new Date().toLocaleString('pt-PT') };
 }
-function syncTrabAbertos(){ (state.jobs||[]).forEach(j=>{ if(j.status!=='done') pushTrabAberto(j,'aberto'); }); }
+async function pushTrabAberto(j, estado, forcar){
+  const url=(state.cfg && state.cfg.urlTrabAbertos)||null; if(!url||!j) return;
+  const id=deviceName()+'|'+j.id;
+  if(estado!=='fechado' && jaFechado(id)) return;          // fechado não volta a abrir
+  const sig=trabAssinatura(j,estado);
+  if(!forcar && estado!=='fechado' && _trabSig[id]===sig) return;   // nada mudou → não escreve
+  const rec=trabRec(j,estado);
+  let ok=false;
+  try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(rec)}); ok=r.ok; }catch(e){}
+  if(ok){ _trabSig[id]=sig; if(estado==='fechado') marcarTrabFechado(id); }
+  else if(estado==='fechado'){ const f=filaFechos(); if(!f.some(x=>x.ID===rec.ID)){ f.push(rec); guardarFilaFechos(f); } }
+}
+async function reenviarFechos(){
+  const url=(state.cfg && state.cfg.urlTrabAbertos)||null; const fila=filaFechos(); if(!url||!fila.length) return;
+  const enviados=[];
+  for(const rec of fila){ let ok=false;
+    try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(rec)}); ok=r.ok; }catch(e){}
+    if(ok){ marcarTrabFechado(rec.ID); enviados.push(String(rec.ID)); } }
+  if(enviados.length){ guardarFilaFechos(filaFechos().filter(x=>enviados.indexOf(String(x.ID))===-1)); }  // reler: pode ter entrado outro entretanto
+}
+function syncTrabAbertos(){ reenviarFechos(); (state.jobs||[]).forEach(j=>{ if(j.status!=='done') pushTrabAberto(j,'aberto'); }); }
+
+// A data chega da folha como número de série do Excel.
+function trabDataISO(v){ const s=String(v==null?'':v).trim();
+  if(/^\d+(\.\d+)?$/.test(s)){ const d=new Date(Math.round((parseFloat(s)-25569)*86400000)); return isNaN(d.getTime())?'':d.toISOString().slice(0,10); }
+  let m=s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) return m[0];
+  m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(m) return m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2);
+  return ''; }
+function trabTs(s){ const m=String(s||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if(!m) return null; const d=new Date(+m[3],+m[2]-1,+m[1],+m[4],+m[5],+(m[6]||0)); return isNaN(d.getTime())?null:d.getTime(); }
+
+// RECUPERAR os trabalhos que este aparelho perdeu.
+// Os trabalhos em curso só viviam no armazenamento do browser: se o aparelho vai
+// abaixo, ou o browser limpa os dados do site, desaparecem. A nuvem tem-nos — e a
+// primeira linha de cada trabalho diz a hora a que começou, por isso o cronómetro
+// também se recupera. Só se recuperam os de HOJE, para não ressuscitar velharias.
+function recuperarTrabAbertos(rows){
+  if(!rows || !rows.length || !state.cfg) return 0;
+  const eu=deviceName(), hoje=dstr(nowTs());
+  const porId={};
+  rows.forEach(x=>{ const id=String(x.ID||''); if(!id) return;
+    if(!porId[id]) porId[id]={prim:x, ult:x, fechado:false};
+    porId[id].ult=x; if(/^fechad|^fechar/.test(String(x.Estado||''))) porId[id].fechado=true; });
+  let n=0;
+  for(const id in porId){ const g=porId[id], x=g.ult;
+    if(g.fechado || jaFechado(id)) continue;
+    if(String(x.Dispositivo||'')!==eu) continue;
+    const dia=trabDataISO(x.Data); if(dia!==hoje) continue;
+    const jid=String(x.JobID||''); if(!jid) continue;
+    if((state.jobs||[]).some(j=>String(j.id)===jid)) continue;      // já cá está
+    const ts=trabTs(g.prim.DataHoraRegisto)||nowTs();
+    const workers=String(x.Pins||'').split(',').map(s=>s.trim()).filter(Boolean).map(p=>{
+      const o=(state.cfg.operadores||[]).find(y=>String(y.pin)===p);
+      return o?{op:o.nome, opCurto:curto(o.nome), pin:p, startTs:ts, pauses:[], status:'running', endTs:null}:null;
+    }).filter(Boolean);
+    if(!workers.length) continue;                                   // sem operador reconhecido não vale a pena
+    let ser=String(x.Series||''); const ehStock=/^STOCK · /.test(ser); if(ehStock) ser=ser.replace(/^STOCK · /,'');
+    const series=ser.split(' · ').map(s=>s.trim()).filter(Boolean);
+    const j={ id:jid, artigo:x.Artigo||'', programa:x.Programa||'', operacao:x.Operacao||'', unidade:x.Unidade||'',
+      modo:(ehStock?'Stock':'Encomenda'), series, plano:(planoDoArtigo(x.Artigo||'')||{}).codigo||'',
+      dia, status:'open', workers };
+    state.jobs.push(j); _trabSig[id]=trabAssinatura(j,'aberto');    // não reescrever já o que acabámos de ler
+    n++;
+  }
+  if(n){ save(); if(state.view==='board') render(); toast(n+(n===1?' trabalho recuperado':' trabalhos recuperados'),'ok'); }
+  return n;
+}
+
 async function reconcileTrabAbertos(){
   const url=(state.cfg && state.cfg.urlTrabAbertosLer)||null; if(!url) return;
   try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); const jj=await r.json(); const rows=jj.value||jj.linhas||(Array.isArray(jj)?jj:[]);
-    const est={}; rows.forEach(x=>{ if(x.ID) est[String(x.ID)]=String(x.Estado||''); });   // ordem da tabela = cronológica → fica o último estado
+    // BASTA UMA linha "fechado" para o trabalho estar fechado — ver a nota lá em cima.
+    const fechados={}; rows.forEach(x=>{ if(!x.ID) return; const e=String(x.Estado||''); if(e==='fechado'||e==='fechar') fechados[String(x.ID)]=true; });
     let mudou=false;
-    (state.jobs||[]).forEach(j=>{ if(j.status!=='done'){ const id=deviceName()+'|'+j.id; if(est[id]==='fechado'||est[id]==='fechar'){ (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } }); j.status='done'; mudou=true; } } });
+    (state.jobs||[]).forEach(j=>{ if(j.status==='done') return; const id=deviceName()+'|'+j.id;
+      if(fechados[id]){ (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } }); j.status='done'; marcarTrabFechado(id); mudou=true; } });
     if(mudou){ save(); if(state.view==='board') render(); }
+    recuperarTrabAbertos(rows);
   }catch(e){}
 }
 setInterval(syncTrabAbertos, 60000);
@@ -1017,6 +1120,7 @@ setInterval(()=>{
 
 /* ---- arranque ---- */
 (async function init(){
+  ensureDeviceName();   // pergunta o nome do aparelho se ainda não tiver (nunca fica "Sem nome")
   try{ state.jobs=JSON.parse(localStorage.getItem(LS.jobs)||'[]'); }catch(e){ state.jobs=[]; }
   // migrar/limpar: formato antigo -> workers; descartar trabalhos sem operador
   state.jobs=(state.jobs||[]).map(j=>{ if(!j) return null;
@@ -1033,6 +1137,7 @@ setInterval(()=>{
   if(!state.cfg){ $('#app').innerHTML='<div class="wrap"><div class="empty">Não consegui carregar a configuração (config.json).</div></div>'; return; }
   state.enc=await loadEnc();
   state.view='board'; render();
+  reconcileTrabAbertos();   // recuperar JA os trabalhos que este aparelho tenha perdido
   window.addEventListener('online',()=>{ syncQueue(); syncPertQueue(); syncStockQ(); });
 })();
 
