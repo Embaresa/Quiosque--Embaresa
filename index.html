@@ -932,19 +932,24 @@ function buildAtivos(){
     desdeMin:Math.floor((nowTs()-p.startTs)/60000), estado:'pausa' }); });
   return out;
 }
-// garante que o aparelho TEM nome (do ?d= ou perguntando 1x) — evita ficar "Sem nome" e perder a identidade
+// "Sem nome" NAO e um nome. Um aparelho ficou com isso gravado e passou dias a
+// escrever na tabela dos trabalhos abertos sem que ninguem soubesse qual era.
+// Aqui trata-se como se nao tivesse nome nenhum, para voltar a perguntar.
+function nomeInvalido(n){ return !n || !String(n).trim() || /^sem nome$/i.test(String(n).trim()); }
+function nomeGuardado(){ const n=localStorage.getItem('q_dispositivo'); return nomeInvalido(n)?null:n; }
+
+// garante que o aparelho TEM nome (do ?d= ou perguntando 1x)
 function ensureDeviceName(){
   try{ const p=new URLSearchParams(location.search).get('d'); if(p&&p.trim()){ localStorage.setItem('q_dispositivo',p.trim()); return; } }catch(e){}
-  if(!localStorage.getItem('q_dispositivo')){
-    let n=null; try{ n=prompt('Qual é o nome deste aparelho?\n(ex.: Portatil-E2, Zebra, Monitor-Fracoes)',''); }catch(e){}
-    if(n && n.trim()) localStorage.setItem('q_dispositivo', n.trim());
-  }
+  if(nomeGuardado()) return;
+  let n=null; try{ n=prompt('Qual é o nome deste aparelho?\n(ex.: Tablet-Montagem, Zebra, Telemovel-Soldadura)',''); }catch(e){}
+  if(n && !nomeInvalido(n)) localStorage.setItem('q_dispositivo', n.trim());
 }
 function deviceName(){
   try{ const p=new URLSearchParams(location.search).get('d'); if(p){ localStorage.setItem('q_dispositivo',p); return p; } }catch(e){}
-  // Sem nome guardado, cada aparelho fica com um proprio: com "Sem nome" para todos,
-  // varios telemoveis partilhavam a mesma identidade no Painel.
-  let n=localStorage.getItem('q_dispositivo');
+  // Sem nome escolhido, cada aparelho fica com um proprio: com "Sem nome" para todos,
+  // varios aparelhos partilhavam a mesma identidade no Painel.
+  let n=nomeGuardado();
   if(!n){ n='Aparelho-'+Math.random().toString(36).slice(2,6).toUpperCase(); try{ localStorage.setItem('q_dispositivo',n); }catch(e){} }
   return n;
 }
@@ -1056,8 +1061,13 @@ function recuperarTrabAbertos(rows){
   return n;
 }
 
+// Uma leitura de cada vez. Estavamos a pedir de 30 em 30 segundos; quando o fluxo
+// demorava mais do que isso, os pedidos acumulavam-se e entupiam-no de vez.
+var _recAndar = false;
 async function reconcileTrabAbertos(){
   const url=(state.cfg && state.cfg.urlTrabAbertosLer)||null; if(!url) return;
+  if(_recAndar) return;
+  _recAndar = true;
   try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); const jj=await r.json(); const rows=jj.value||jj.linhas||(Array.isArray(jj)?jj:[]);
     // BASTA UMA linha "fechado" para o trabalho estar fechado — ver a nota lá em cima.
     const fechados={}; rows.forEach(x=>{ if(!x.ID) return; const e=String(x.Estado||''); if(e==='fechado'||e==='fechar') fechados[String(x.ID)]=true; });
@@ -1067,9 +1077,10 @@ async function reconcileTrabAbertos(){
     if(mudou){ save(); if(state.view==='board') render(); }
     recuperarTrabAbertos(rows);
   }catch(e){}
+  finally{ _recAndar = false; }
 }
 setInterval(syncTrabAbertos, 60000);
-setInterval(reconcileTrabAbertos, 30000);
+setInterval(reconcileTrabAbertos, 180000);   // de 3 em 3 minutos chega: fechar um trabalho nao e urgente ao segundo
 
 /* ---- "Os meus trabalhos abertos" (encerrar a partir de qualquer aparelho) ---- */
 let _meusTrab=[];
