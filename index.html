@@ -960,7 +960,14 @@ async function enviarBatimento(){
 }
 var _hbT=null;
 function agendarBatimento(){ clearTimeout(_hbT); _hbT=setTimeout(enviarBatimento,1500); }
-setInterval(enviarBatimento, 20000); // mantem o painel fresco enquanto ha trabalho
+// Batimento de minuto a minuto, nao de 20 em 20 segundos.
+// Cada batimento e uma linha na tabela Ativos.xlsx, e o fluxo que o Painel le so
+// devolve as ultimas 256 — a 3 linhas por minuto isso eram 28 minutos de historico,
+// e o Painel tolera 25 de silencio. Faltavam tres minutos para os aparelhos que
+// adormecem comecarem a desaparecer do Painel sem razao.
+// Nao se perde reactividade: qualquer mudanca dispara um batimento imediato
+// (agendarBatimento, 1,5 s) — isto e so o sinal de vida.
+setInterval(enviarBatimento, 60000);
 
 /* ---- Trabalhos abertos -> nuvem (Painel persistente + encerrar entre aparelhos) ---- */
 
