@@ -154,59 +154,6 @@ function jaEnviado(id){ return id && sentIds().indexOf(id)!==-1; }
 function marcarEnviado(id){ try{ if(!id)return; let s=sentIds(); if(s.indexOf(id)===-1){ s.push(id); if(s.length>800) s=s.slice(-800); localStorage.setItem(LS.sent,JSON.stringify(s)); } }catch(e){} }
 function pertRecord(op,motivo,ini,fim){ return { IDRegisto:'P'+Date.now()+Math.floor(Math.random()*1000), Data:dstr(ini), Colaborador:op, TipoPerturbacao:motivo, HoraInicio:hhmm(ini), HoraFim:hhmm(fim), Duracao:Math.round(Math.max(0,fim-ini)/60000).toString(), DataHoraRegisto:new Date().toLocaleString('pt-PT') }; }
 function enqueuePerturbacao(rec){ const q=loadPertQ(); q.push(rec); savePertQ(q); syncPertQueue(); }
-
-/* ---- FECHO AUTOMÁTICO AO FIM DO DIA (meia-noite) ----
-   Nada fica aberto de um dia para o outro. Uma janela do quiosque esquecida aberta
-   continuava a marcar tempo e a mandar batimentos com a sessão da véspera: no monitor
-   das Frações uma segunda janela repetiu as 14:06 do dia anterior durante 20 horas, e
-   o Painel mostrava esse estado em vez do de hoje.
-   Corre de minuto a minuto E ao arrancar — uma janela adormecida pode não ter corrido
-   o temporizador à hora certa, e ao acordar tem de pôr as contas em dia.
-   O trabalho NÃO é dado como concluído: fica registado o tempo até ao fim do dia com
-   OperacaoConcluida=Não, para no dia seguinte se retomar a operação onde ficou.
-   A hora gravada é 23:59 e não 00:00, para o registo ficar no dia a que pertence em
-   vez de saltar para o dia seguinte. */
-const HORA_FECHO = 23, MIN_FECHO = 59;   // fim do dia
-function limiteTurno(ts){
-  const d = new Date(ts); d.setHours(HORA_FECHO,MIN_FECHO,0,0);
-  if(d.getTime() <= ts) d.setDate(d.getDate()+1);   // começou já depois disso → conta para o dia seguinte
-  return d.getTime();
-}
-function fecharFimDeTurno(){
-  const agora = nowTs(); let nT=0, nP=0, mudou=false;
-  // paragens ainda a correr
-  (state.perts||[]).slice().forEach(p=>{
-    const lim = limiteTurno(p.startTs);
-    if(agora <= lim) return;
-    enqueuePerturbacao(pertRecord(p.op, p.motivo, p.startTs, lim));
-    state.perts = state.perts.filter(x=>x.id!==p.id); nP++; mudou=true;
-  });
-  if(nP) saveP();
-  // trabalhos ainda a correr
-  (state.jobs||[]).forEach(j=>{
-    if(j.status==='done') return;
-    let fechei=false;
-    (j.workers||[]).forEach(wk=>{
-      if(wk.endTs) return;
-      const lim = limiteTurno(wk.startTs);
-      if(agora <= lim) return;
-      const pa = (wk.pauses||[])[ (wk.pauses||[]).length-1 ];
-      if(pa && !pa.end){ pa.end = Math.max(pa.start, lim); if(pa.motivo) enqueuePerturbacao(pertRecord(wk.op, pa.motivo, pa.start, pa.end)); }
-      wk.endTs = lim; wk.status = 'parado';
-      enqueueRegisto(j, wk, false);   // regista o tempo; a operação fica por concluir
-      nT++; fechei=true; mudou=true;
-    });
-    if(fechei && !(j.workers||[]).some(w=>!w.endTs)){ j.status='done'; try{ pushTrabAberto(j,'fechado'); }catch(e){} }
-  });
-  if(mudou){
-    save();
-    if(typeof guardarNoDisco==='function') guardarNoDisco();
-    if(typeof agendarBatimento==='function') agendarBatimento();
-    if(state.view==='board') render();
-    toast('Fecho do dia — '+nT+' trabalho(s) e '+nP+' paragem(ns) encerrados às 23:59','ok');
-  }
-}
-setInterval(fecharFimDeTurno, 60000);
 function closePause(j){ const p=j.pauses[j.pauses.length-1]; if(p&&!p.end){ p.end=nowTs(); if(p.motivo) enqueuePerturbacao(pertRecord(j.op,p.motivo,p.start,p.end)); } }
 
 /* tempo por operador e horas-homem do trabalho */
@@ -1200,12 +1147,13 @@ setInterval(()=>{
     return j;
   }).filter(j=> j && j.workers && j.workers.some(w=>(w.op||'').trim()));
   try{ state.perts=JSON.parse(localStorage.getItem(LS.perts)||'[]'); }catch(e){ state.perts=[]; }
-  // (os trabalhos e paragens de dias anteriores são encerrados por fecharFimDeTurno,
-  //  mais abaixo — já com a config carregada, para o registo sair completo)
+  // pausa automática de trabalhos de dias anteriores ainda a correr
+  const hoje=dstr(nowTs()); let mudou=false;
+  for(const j of state.jobs){ if(j.status!=='done' && j.dia!==hoje){ (j.workers||[]).forEach(wk=>{ if(!wk.endTs && wk.status==='running'){ wk.status='paused'; wk.pauseMotivo='Fim de turno (automático)'; wk.pauses.push({start:nowTs(),motivo:'Fim de turno (automático)',auto:true}); mudou=true; } }); } }
+  if(mudou)save();
   state.cfg=await loadConfig();
   if(!state.cfg){ $('#app').innerHTML='<div class="wrap"><div class="empty">Não consegui carregar a configuração (config.json).</div></div>'; return; }
   state.enc=await loadEnc();
-  fecharFimDeTurno();       // põe as contas em dia se ficou algo aberto da véspera
   state.view='board'; render();
   reconcileTrabAbertos();   // recuperar JA os trabalhos que este aparelho tenha perdido
   window.addEventListener('online',()=>{ syncQueue(); syncPertQueue(); syncStockQ(); });
