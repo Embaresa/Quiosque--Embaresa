@@ -961,14 +961,29 @@ async function syncQueue(){
   } finally { _syncing=false; }
   saveQueue(resto); render();
 }
+var _syncingP=false;
 async function syncPertQueue(){
+  // Tranca + memoria do que ja foi enviado — o mesmo que o syncQueue dos registos ja
+  // tinha e este nao. Sem isso, a paragem era enviada DUAS vezes: o enqueuePerturbacao
+  // chama esta funcao logo, e o temporizador dos 30s podia entrar ao mesmo tempo; as duas
+  // liam a mesma fila e as duas faziam o POST. Aconteceu a 04-09 com a "Formacao on the
+  // Job" do W. Inaba — a mesma linha, com o MESMO IDRegisto, ficou duplicada na nuvem.
+  if(_syncingP) return;
   const url=(state.cfg && state.cfg.urlPerturbacoes)||null;
   let q=loadPertQ(); if(!q.length)return;
   if(!url) return; // sem fluxo definido: fica em fila local
-  const resto=[];
-  for(const reg of q){ let ok=false;
-    try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(reg)}); ok=r.ok; }catch(e){ ok=false; }
-    if(!ok)resto.push(reg); }
+  _syncingP=true;
+  const resto=[]; const vistos={};
+  try{
+    for(const reg of q){
+      const id=reg.IDRegisto;
+      if(id && (jaEnviado(id) || vistos[id])) continue;   // ja foi / repetido na fila
+      if(id) vistos[id]=1;
+      let ok=false;
+      try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(reg)}); ok=r.ok; }catch(e){ ok=false; }
+      if(ok){ marcarEnviado(id); } else { resto.push(reg); }
+    }
+  } finally { _syncingP=false; }
   savePertQ(resto);
 }
 setInterval(()=>{ try{ syncQueue(); syncPertQueue(); syncStockQ(); }catch(e){} }, 30000); // reenvia as filas automaticamente (quando a rede volta)
