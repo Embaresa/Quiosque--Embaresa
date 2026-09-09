@@ -302,6 +302,32 @@ function planoDoArtigo(art){ // devolve o plano OK (default aéreo/único)
   if(!ps.length) return null;
   const aereo=ps.find(p=>!p.variante || p.variante==='Aéreo'); return aereo||ps[0]; }
 function postoDaUnidade(u){ const p=state.cfg.postos.find(x=>x.unidade===u); return p?p.posto:(u||''); }
+// UNIDADE A PARTIR DO CATALOGO
+// Os trabalhos recuperados da nuvem trazem a unidade da tabela dos trabalhos abertos, e se
+// essa vier vazia todos os registos desse trabalho iam para o Excel SEM unidade — foi o que
+// aconteceu a 11 registos entre julho e setembro. Aqui vai-se buscar ao catalogo.
+// A mesma operacao pode ser feita em unidades diferentes conforme o ARTIGO (o
+// "E1-Frac-Preparação e Montagem" e feito em Évora 2, menos a E1-Embalagem NMF que e em
+// Évora 1), por isso procura-se primeiro pelo par operacao+artigo.
+// O "Tipo Caixa" do Excel dos registos é o PROGRAMA do artigo — o fluxo escreve o campo
+// Programa nessa coluna. Um trabalho recuperado da nuvem sem programa deixava a coluna vazia
+// (204 registos). O programa está no catálogo, ao lado do artigo.
+function programaDoArtigo(artigo){
+  const n=s=>String(s||'').trim().toLowerCase();
+  const a=((state.cfg&&state.cfg.artigos)||[]).find(x=>n(x.artigo)===n(artigo));
+  return a?(a.programa||''):'';
+}
+function unidadeDaOp(operacao, artigo){
+  const ops=(state.cfg&&state.cfg.operacoes)||[];
+  const n=s=>String(s||'').trim().toLowerCase();
+  const iguais=ops.filter(o=>n(o.operacao)===n(operacao));
+  if(!iguais.length) return '';
+  if(artigo){
+    const exato=iguais.find(o=>(o.artigos||[]).some(a=>n(a)===n(artigo)));
+    if(exato) return exato.unidade||'';
+  }
+  return iguais.length===1 ? (iguais[0].unidade||'') : '';   // ambiguo sem artigo: melhor vazio do que errado
+}
 function objetivoOperacao(op, artigo){ const ao=state.cfg.temposArtigoOperacao||{}; let v=(artigo?(ao[artigo+'|'+op]||''):''); if(!v) v=state.cfg.temposOperacao[op]||''; if(!v && artigo) v=(state.cfg.temposTipologia||{})[artigo]||''; return v; }
 function parseObjetivoMs(str){ if(!str) return 0; str=String(str).trim();
   if(str.indexOf(':')>=0){ const p=str.split(':').map(Number); return (((p[0]||0)*3600)+((p[1]||0)*60)+(p[2]||0))*1000; }
@@ -829,10 +855,43 @@ function renderSeries(w){
 }
 function parseSeries(s){ return (s||'').split(/[\s,;\n]+/).map(x=>x.trim().toUpperCase()).filter(Boolean); }
 
+// A MESMA GUARDA DO MODO ENCOMENDA, PARA O MODO STOCK
+// No modo Encomenda as caixas entregues ou embaladas ficam fora da lista, e só entram com
+// confirmação. No modo Stock o número de série escreve-se à mão e não havia verificação
+// nenhuma: bastava escrever uma série já entregue e passava. Foi assim que a EM2408, entregue
+// a 27/07, apanhou uma soldadura a 08/09.
+function estadoDaSerie(serie){
+  const s=String(serie||'').trim().toUpperCase();
+  const e=(state.enc||[]).find(x=>String(x.serie||'').trim().toUpperCase()===s);
+  return e?String(e.estado||'').trim().toLowerCase():'';
+}
+function serieFechadaPara(estado, operacao){
+  const segundoCiclo=/tampa|embalamento final/i.test(operacao||'');
+  if(segundoCiclo) return false;                    // 2º ciclo dos KC vem mesmo depois de tudo
+  if(estado==='embalada') return true;              // embalada = terminada
+  if(estado==='entregue') return !/embalamento|carga e transporte/i.test(operacao||'');
+  return false;
+}
+
 function startJob(){
   const d=state.draft; let series=[];
   if(d.modo==='Encomenda'){ series=(d.sel||[]).slice(); if(!series.length){ toast('Seleciona pelo menos uma série','err'); return; } }
-  else { series=parseSeries(d.stock); if(!series.length) series=['STOCK-'+Date.now().toString().slice(-6)]; }
+  else {
+    series=parseSeries(d.stock);
+    // BLOQUEIO, nao aviso. Uma caixa entregue ou embalada nao volta a receber esta operacao
+    // por engano de digitacao. Se for retrabalho a serio, regista-se no Supervisor, onde fica
+    // a saber-se quem o fez e porque.
+    const fechadas=series.map(s=>({s, est:estadoDaSerie(s)})).filter(x=>serieFechadaPara(x.est, d.operacao));
+    if(fechadas.length){
+      alert('Não dá para registar esta operação nestas caixas:\n\n'+
+            fechadas.map(x=>'   '+x.s+' — '+x.est).join('\n')+'\n\n'+
+            'Depois de ENTREGUE só se regista embalamento ou transporte.\n'+
+            'Depois de EMBALADA, mais nada.\n\n'+
+            'Confirma o número de série. Se for mesmo retrabalho, tem de ser lançado no Supervisor.');
+      return;
+    }
+    if(!series.length) series=['STOCK-'+Date.now().toString().slice(-6)];
+  }
   const sig=d.operacao+'|'+series.slice().sort().join(',');
   const existing=state.jobs.find(j=>j.status!=='done' && (j.operacao+'|'+(j.series||[]).slice().sort().join(','))===sig);
   const worker={ op:state.op.nome, opCurto:curto(state.op.nome), pin:state.op.pin, startTs:nowTs(), pauses:[], status:'running', endTs:null };
@@ -953,8 +1012,8 @@ function enqueueRegisto(j,wk,concluida){
   series.forEach(serie=>{
     const _id = j.id+'-'+(wk.pin||'x')+'-'+wk.startTs+'-'+serie;
     if(jaEnviado(_id) || q.some(x=>x.ID===_id)) return; // anti-duplicado: mesmo ID ja enviado ou ja na fila
-    q.push({ ID:_id, Data:j.dia, Artigo:j.artigo, Programa:j.programa, Operacao:j.operacao,
-      UnidadeProducao:j.unidade, Posto:postoDaUnidade(j.unidade), Colaborador:wk.op, Modo:j.modo,
+    q.push({ ID:_id, Data:j.dia, Artigo:j.artigo, Programa:(j.programa||programaDoArtigo(j.artigo)), Operacao:j.operacao,
+      UnidadeProducao:(j.unidade||unidadeDaOp(j.operacao,j.artigo)), Posto:postoDaUnidade(j.unidade||unidadeDaOp(j.operacao,j.artigo)), Colaborador:wk.op, Modo:j.modo,
       NumSerie:serie, HoraInicio:hhmm(wk.startTs), HoraFim:hhmm(wk.endTs||nowTs()),
       PausasMin:Math.round(pauMs/60000).toString(), Duracao:Math.round(durMs/60000).toString(),
       Quantidade:'1', Plano:j.plano, Comentarios:(state.cfg&&state.cfg.modoTeste?'TESTE':''), CaixaConcluida:caixaConcl, OperacaoConcluida:(concluida?'Sim':'Nao'),
@@ -1146,7 +1205,8 @@ function recuperarTrabAbertos(rows){
     if(!workers.length) continue;                                   // sem operador reconhecido não vale a pena
     let ser=String(x.Series||''); const ehStock=/^STOCK · /.test(ser); if(ehStock) ser=ser.replace(/^STOCK · /,'');
     const series=ser.split(' · ').map(s=>s.trim()).filter(Boolean);
-    const j={ id:jid, artigo:x.Artigo||'', programa:x.Programa||'', operacao:x.Operacao||'', unidade:x.Unidade||'',
+    const j={ id:jid, artigo:x.Artigo||'', programa:(x.Programa||programaDoArtigo(x.Artigo||'')), operacao:x.Operacao||'',
+      unidade:(x.Unidade||unidadeDaOp(x.Operacao||'', x.Artigo||'')),
       modo:(ehStock?'Stock':'Encomenda'), series, plano:(planoDoArtigo(x.Artigo||'')||{}).codigo||'',
       dia, status:'open', workers };
     state.jobs.push(j); _trabSig[id]=trabAssinatura(j,'aberto');    // não reescrever já o que acabámos de ler
