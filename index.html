@@ -541,12 +541,30 @@ function confirmOp(){
   else { state.draft={ artigo:null, operacao:null, modo:'Encomenda', sel:[], stock:'' }; state._prog=null; state._af=''; state.view='artigo'; }
   render();
 }
+// PARA OS TRANSPORTES, MOVER MATERIAL NAO E PARAGEM — E O TRABALHO
+// Movimentar e organizar material e paragem para quem esta a montar uma caixa (a caixa ficou
+// a espera), mas e a propria funcao de quem faz logistica. Estes motivos tem OPERACAO
+// equivalente no catalogo (programa Logistica), e por isso saem da lista das paragens para
+// quem esta na seccao Transportes. A Taffaly ja lancava pela operacao; o Rui lancava tudo
+// pela paragem — 643 h no sitio errado, que arrastavam o OEE da fabrica inteira para baixo.
+// Esconder e melhor do que avisar: pedir a alguem que se lembre, 243 vezes, nao funcionou.
+const PERT_QUE_SAO_TRABALHO_NA_LOGISTICA = /organiza|movimenta|descarga cami|limpeza cami/i;
+function motivosParaEsteOperador(){
+  const todos = (state.cfg && state.cfg.perturbacoes) || [];
+  const sec = String((state.op && state.op.seccao) || '');
+  if(!/transp/i.test(sec)) return todos;
+  return todos.filter(m => !PERT_QUE_SAO_TRABALHO_NA_LOGISTICA.test(String(m||'')));
+}
 function renderPertMotivo(w){
   if(!state.pertDraft) state.pertDraft={motivo:null};
   w.append(backbar('board','Paragem — '+curto(state.op.nome)));
   w.append(el('p',{class:'lbl'},'Motivo da paragem'));
+  const lista = motivosParaEsteOperador();
+  if(lista.length < ((state.cfg && state.cfg.perturbacoes)||[]).length){
+    w.append(el('div',{class:'flag'},'Movimentar e organizar material é o teu trabalho, não uma paragem — regista pelo ▶ Começar, em Logística.'));
+  }
   const box=el('div',{class:'reasons'});
-  state.cfg.perturbacoes.forEach(r=>box.append(el('button',{class:'rc'+(state.pertDraft.motivo===r?' on':''),onclick:()=>{state.pertDraft.motivo=r;render();}},r)));
+  lista.forEach(r=>box.append(el('button',{class:'rc'+(state.pertDraft.motivo===r?' on':''),onclick:()=>{state.pertDraft.motivo=r;render();}},r)));
   w.append(box);
   w.append(el('div',{class:'cta',style:'position:static;padding:16px 0 0'},
     el('button',{class:'big warn',onclick:startPert},'⏸  Começar paragem')));
