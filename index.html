@@ -173,6 +173,7 @@ function limiteTurno(ts){
   return d.getTime();
 }
 function fecharFimDeTurno(){
+  if(_deLado) return;   // janela de lado: nao fecha nada, para nao escrever fantasmas
   const agora = nowTs(); let nT=0, nP=0, mudou=false;
   // DUAS JANELAS DO MESMO POSTO partilham o localStorage, mas cada uma guarda o seu estado
   // em memória. Uma aba esquecida de manhã continua a achar que tem paragens e trabalhos
@@ -1067,6 +1068,50 @@ async function syncPertQueue(){
 }
 setInterval(()=>{ try{ syncQueue(); syncPertQueue(); syncStockQ(); }catch(e){} }, 30000); // reenvia as filas automaticamente (quando a rede volta)
 
+/* ---- UMA JANELA POR POSTO ---------------------------------------------------
+   Duas janelas do mesmo quiosque partilham o localStorage mas cada uma tem o seu estado
+   em memoria. Batem as duas (enchem a tabela dos batimentos ao dobro e enganam o Painel),
+   e a esquecida escreve paragens fantasma no fecho do dia. Aconteceu tres vezes numa semana.
+
+   Regra: manda a ULTIMA janela aberta. A anterior fica de lado — deixa de bater, de
+   sincronizar e de fechar o dia — e mostra porque. Bloquear a NOVA seria pior: quando uma
+   janela encrava, o instinto e abrir outra, e ficava-se sem nenhuma. Fica um botao para
+   retomar esta, caso tenha sido engano.
+
+   Nao fecha a janela sozinha porque o browser nao deixa: window.close() so funciona em
+   janelas abertas por script. O que se garante e que uma janela de lado nao escreve nada.  */
+const JANELA_ID = 'W' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
+const K_JANELA  = 'q_janela_ativa';
+var _deLado = false;
+function reclamarJanela(){ try{ localStorage.setItem(K_JANELA, JSON.stringify({id:JANELA_ID, ts:Date.now()})); }catch(e){} }
+function donoDaJanela(){ try{ return JSON.parse(localStorage.getItem(K_JANELA)||'null'); }catch(e){ return null; } }
+function porJanelaDeLado(){
+  if(_deLado || document.getElementById('janela-de-lado')) return;
+  _deLado = true;
+  const ov=document.createElement('div'); ov.id='janela-de-lado';
+  ov.style.cssText='position:fixed;inset:0;z-index:99999;background:#0b1116;color:#cfe3ee;display:flex;'+
+    'align-items:center;justify-content:center;text-align:center;font-family:system-ui;padding:24px';
+  const cx=document.createElement('div'); cx.style.maxWidth='560px';
+  cx.innerHTML='<div style="font-size:64px">🪟</div>'+
+    '<h2 style="margin:14px 0 10px;font-size:26px">Esta janela ficou de lado</h2>'+
+    '<p style="opacity:.85;line-height:1.6;font-size:16px">O quiosque foi aberto noutra janela deste posto. '+
+    'Esta deixou de registar, para não haver duas a escrever ao mesmo tempo.</p>'+
+    '<p style="opacity:.85;line-height:1.6;font-size:16px"><b>Podes fechá-la.</b> O trabalho continua na outra.</p>';
+  const b=document.createElement('button');
+  b.textContent='Quero usar esta janela';
+  b.style.cssText='margin-top:18px;padding:14px 26px;font-size:17px;border-radius:12px;border:1px solid #2f4756;background:#13202a;color:#cfe3ee;cursor:pointer';
+  b.onclick=function(){ reclamarJanela(); _deLado=false; ov.remove(); };
+  cx.appendChild(b); ov.appendChild(cx); document.body.appendChild(ov);
+}
+function vigiarJanela(){
+  const d=donoDaJanela();
+  if(!d || !d.id || d.id===JANELA_ID){ reclamarJanela(); return; }
+  porJanelaDeLado();
+}
+reclamarJanela();
+setInterval(vigiarJanela, 3000);
+window.addEventListener('storage', function(e){ if(e.key===K_JANELA) vigiarJanela(); });
+
 /* ---- batimento para o painel ao vivo (andon). Inofensivo ate urlAtivos existir. ---- */
 function buildAtivos(){
   const out=[];
@@ -1101,6 +1146,7 @@ function deviceName(){
   return n;
 }
 async function enviarBatimento(){
+  if(_deLado) return;   // janela de lado: nao bate, para nao enganar o Painel
   const url=(state.cfg && state.cfg.urlAtivos)||null; if(!url) return; // sem fluxo definido -> nao envia
   const payload={ dispositivo:deviceName(), momento:new Date().toISOString(), dados:JSON.stringify(buildAtivos()) };
   try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); }catch(e){}
@@ -1167,7 +1213,7 @@ async function reenviarFechos(){
     if(ok){ marcarTrabFechado(rec.ID); enviados.push(String(rec.ID)); } }
   if(enviados.length){ guardarFilaFechos(filaFechos().filter(x=>enviados.indexOf(String(x.ID))===-1)); }  // reler: pode ter entrado outro entretanto
 }
-function syncTrabAbertos(){ reenviarFechos(); (state.jobs||[]).forEach(j=>{ if(j.status!=='done') pushTrabAberto(j,'aberto'); }); }
+function syncTrabAbertos(){ if(_deLado) return; reenviarFechos(); (state.jobs||[]).forEach(j=>{ if(j.status!=='done') pushTrabAberto(j,'aberto'); }); }
 
 // A data chega da folha como número de série do Excel.
 function trabDataISO(v){ const s=String(v==null?'':v).trim();
@@ -1220,6 +1266,7 @@ function recuperarTrabAbertos(rows){
 // demorava mais do que isso, os pedidos acumulavam-se e entupiam-no de vez.
 var _recAndar = false;
 async function reconcileTrabAbertos(){
+  if(_deLado) return;   // janela de lado: nao recupera trabalhos para um estado que ja nao manda
   const url=(state.cfg && state.cfg.urlTrabAbertosLer)||null; if(!url) return;
   if(_recAndar) return;
   _recAndar = true;
