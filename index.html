@@ -549,18 +549,23 @@ function confirmOp(){
 // pela paragem — 643 h no sitio errado, que arrastavam o OEE da fabrica inteira para baixo.
 // Esconder e melhor do que avisar: pedir a alguem que se lembre, 243 vezes, nao funcionou.
 const PERT_QUE_SAO_TRABALHO_NA_LOGISTICA = /organiza|movimenta|descarga cami|limpeza cami/i;
+// Paragens reservadas a uma pessoa. A Sonia (09-09-2026): "a gestao de equipa apenas pode
+// ser utilizada pelo Rui" — e o que ela escreveu na folha ConfigPerturbacoes ("apenas para Rui Richau").
+const PERT_SO_PARA = [ { re:/gest[ãa]o\s*equipa/i, quem:/rich/i } ];
 function motivosParaEsteOperador(){
   const todos = (state.cfg && state.cfg.perturbacoes) || [];
+  const nome = String((state.op && state.op.nome) || '');
   const sec = String((state.op && state.op.seccao) || '');
-  if(!/transp/i.test(sec)) return todos;
-  return todos.filter(m => !PERT_QUE_SAO_TRABALHO_NA_LOGISTICA.test(String(m||'')));
+  let lista = todos.filter(m => !PERT_SO_PARA.some(x => x.re.test(String(m||'')) && !x.quem.test(nome)));
+  if(/transp/i.test(sec)) lista = lista.filter(m => !PERT_QUE_SAO_TRABALHO_NA_LOGISTICA.test(String(m||'')));
+  return lista;
 }
 function renderPertMotivo(w){
   if(!state.pertDraft) state.pertDraft={motivo:null};
   w.append(backbar('board','Paragem — '+curto(state.op.nome)));
   w.append(el('p',{class:'lbl'},'Motivo da paragem'));
   const lista = motivosParaEsteOperador();
-  if(lista.length < ((state.cfg && state.cfg.perturbacoes)||[]).length){
+  if(/transp/i.test(String((state.op && state.op.seccao) || ''))){
     w.append(el('div',{class:'flag'},'Movimentar e organizar material é o teu trabalho, não uma paragem — regista pelo ▶ Começar, em Logística.'));
   }
   const box=el('div',{class:'reasons'});
