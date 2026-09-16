@@ -1661,11 +1661,14 @@ function trApagarDano(j,uid,n){ const c=j.transp.caixas.find(x=>x.uid===uid); if
 function trRecetoresConhecidos(){ const ce=(state.cfg&&state.cfg.entregasANN)||{}; let loc=[]; try{ loc=JSON.parse(localStorage.getItem('q_tr_recetores')||'[]'); }catch(e){}
   const vistos=new Set(); return [].concat(ce.recetores||[], loc).filter(r=>r&&r.nome&&!vistos.has(trNorm(r.nome))&&vistos.add(trNorm(r.nome))); }
 function trEmailsEmbaresa(){ const ce=(state.cfg&&state.cfg.entregasANN)||{}; return (ce.emailsEmbaresa&&ce.emailsEmbaresa.length)?ce.emailsEmbaresa:TR_EMAIL_EMBARESA; }
+// 16-09-2026 — a Sónia: "o email é sempre o meu e eu depois reencaminho para a ANN".
+// Por isso o relatório NÃO vai para o email de quem recebe na ANN: esse fica só no relatório,
+// para se saber quem assinou. Se algum dia quiser mandar direto, basta pôr os endereços em
+// config.json → entregasANN.emailsANN.
 function trDestinatarios(j){ const ce=(state.cfg&&state.cfg.entregasANN)||{};
-  const todos=[].concat(trEmailsEmbaresa(), ce.emailsANN||[], [j.transp.recetor.email]); const v=new Set(); const ok=[];
+  const todos=[].concat(trEmailsEmbaresa(), ce.emailsANN||[]); const v=new Set(); const ok=[];
   todos.forEach(e=>{ const x=String(e||'').trim().toLowerCase(); if(trEmailOk(x)&&!v.has(x)){ v.add(x); ok.push(x); } }); return ok; }
-function trTemANN(j){ const emb=new Set(trEmailsEmbaresa().map(e=>String(e).trim().toLowerCase())); return trDestinatarios(j).some(e=>!emb.has(e)); }
-function trTextoDestinos(j){ return 'O relatório vai para: '+(trDestinatarios(j).join(', ')||'—')+(trTemANN(j)?'':'   ⚠️ sem email da ANN — só a Embaresa recebe a cópia'); }
+function trTextoDestinos(j){ return 'O relatório vai para: '+(trDestinatarios(j).join(', ')||'—')+' — a Sónia reencaminha para a ANN.'; }
 function trSetRecetor(j,campo,v){ const r=j.transp.recetor; r[campo]=v; save();
   if(campo==='nome'){ const k=trRecetoresConhecidos().find(x=>trNorm(x.nome)===trNorm(v)&&x.email); const em=document.getElementById('trRecEmail'); if(k&&em&&!em.value.trim()){ em.value=k.email; r.email=k.email; save(); } }
   const d=document.getElementById('trDestinos'); if(d) d.textContent=trTextoDestinos(j); }
@@ -1876,7 +1879,7 @@ function trRenderCarga(w,j){
    Copiar em cada campo. Os dados fixos vêm do config.json → entregasANN.guia (ela pode corrigir lá);
    estes são a reserva, tirados das Listas de Verificação e da app de Expedições. */
 const TR_GUIA_PADRAO = { unidade:'UN', prefixoDescricao:'Caixa de embalagem',
-  carga:{ nome:'Embaresa PT, Lda', morada:'Rua do Azeite, Lote 7', codigoPostal:'7005-422', localidade:'Évora' },
+  carga:{ nome:'Embaresa PT, Lda', morada:'Rua do Azeite, n.º 7', codigoPostal:'7005-422', localidade:'Évora' },
   destinatarios:[
     { id:'met',  curto:'ANN Metálicas (Lote A2)', nome:'ANN Évora Estruturas Metálicas, S.A.',   nif:'508622727', morada:'Lote A2, Parque de Indústria Aeronáutica de Évora, S/N', codigoPostal:'7005-797', localidade:'Évora' },
     { id:'comp', curto:'ANN Compósitos (Lote B)', nome:'ANN Évora Estruturas em Compósitos, S.A.', nif:'508622732', morada:'Lote B, Parque de Indústria Aeronáutica de Évora, S/N',  codigoPostal:'7005-797', localidade:'Évora' } ] };
@@ -2021,7 +2024,7 @@ function trRenderRececao(w,j){
     el('div',{style:'margin-top:6px;font-style:italic'}, '«Recebi as '+trNCaixas(j)+' caixa(s) identificadas neste relatório, conformes e no estado documentado nas fotografias'+(nDano?(', incluindo os '+nDano+' dano(s) assinalado(s)'):'')+'.»')));
   const dl=el('datalist',{id:'trdlrec'}); trRecetoresConhecidos().forEach(x=>dl.append(el('option',{value:x.nome})));
   w.append(el('p',{class:'lbl'},'Nome de quem recebe'), el('input',{class:'search',id:'trRecNome',list:'trdlrec',autocomplete:'off',value:r.nome||'',oninput:(e)=>trSetRecetor(j,'nome',e.target.value)}), dl);
-  w.append(el('p',{class:'lbl'},'Email dessa pessoa (recebe a cópia)'), el('input',{class:'search',id:'trRecEmail',type:'email',inputmode:'email',autocomplete:'off',placeholder:'nome@aernnova.com',value:r.email||'',oninput:(e)=>trSetRecetor(j,'email',e.target.value)}));
+  w.append(el('p',{class:'lbl'},'Email dessa pessoa (opcional — só fica no relatório)'), el('input',{class:'search',id:'trRecEmail',type:'email',inputmode:'email',autocomplete:'off',placeholder:'nome@aernnova.com',value:r.email||'',oninput:(e)=>trSetRecetor(j,'email',e.target.value)}));
   w.append(el('div',{class:'muted',id:'trDestinos',style:'margin:-4px 0 12px'}, trTextoDestinos(j)));
   w.append(el('div',{class:'trsigh'}, el('b',{},'Assinatura de quem recebe (ANN)'), el('span',{class:'chip',id:'trStAnn'}, t.assinado.ann?'✓ assinado':'por assinar')));
   if(!r.recusou){ w.append(el('canvas',{class:'trsig',id:'trSigAnn'})); w.append(el('button',{class:'back',style:'margin-top:6px',onclick:()=>trLimparAss(j,'ann')},'Limpar')); }
