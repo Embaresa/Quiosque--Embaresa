@@ -544,12 +544,12 @@ function ctaBoard(){
 /* ---- FECHAR TRABALHOS ANTIGOS (dias anteriores esquecidos em aberto) ---- */
 function jobsAntigos(){ const hoje=dstr(nowTs()); return state.jobs.filter(j=>j.status!=='done' && j.dia && j.dia!==hoje); }
 function fecharJobAntigo(id){ const j=state.jobs.find(x=>x.id===id); if(!j) return;
-  (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } });
+  fecharSessoesComRegisto(j, 'FECHO DE TRABALHO ANTIGO');   // encerra E regista: o tempo não se perde
   j.status='done'; save(); pushTrabAberto(j,'fechado');
   toast('Trabalho fechado','ok');
   state.view = jobsAntigos().length ? 'fecharAntigos' : 'board'; render();
 }
-function fecharTodosAntigos(){ jobsAntigos().forEach(j=>{ (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } }); j.status='done'; pushTrabAberto(j,'fechado'); });
+function fecharTodosAntigos(){ jobsAntigos().forEach(j=>{ fecharSessoesComRegisto(j, 'FECHO DE TRABALHO ANTIGO'); j.status='done'; pushTrabAberto(j,'fechado'); });
   save(); toast('Trabalhos antigos fechados','ok'); state.view='board'; render();
 }
 function renderFecharAntigos(w){
@@ -1092,6 +1092,68 @@ function renderProxima(w){ const c=state.cont; if(!c){ state.view='board'; retur
   w.append(el('button',{class:'big ghost',style:'margin-top:12px',onclick:()=>{state.cont=null;state.view='board';render();}},'Terminei — voltar ao quadro')); }
 
 /* ---- gravar registo (fila local -> sync) ---- */
+/* ---- REDE DE SEGURANÇA: nenhuma sessão fecha sem registo (16-09-2026) ----
+   A Sónia: "o hugo picão fez registos e aparece vazio". Ele trabalhou os dias 14 e 15 de
+   setembro e no Supervisor não havia uma única linha dele. Havia caminhos que davam a
+   sessão do operador por terminada SEM escrever registo nenhum — o fecho à distância
+   (reconcileTrabAbertos), o fecho de trabalhos antigos, e provavelmente outros que ainda
+   não conhecemos. O tempo desaparecia em silêncio.
+   Regra nova: quem teve sessão, tem registo. O que for fechado automaticamente vai
+   marcado nos Comentários, para ela confirmar as horas em vez de as perder. */
+var MARCA_AUTO = 'FECHO AUTOMÁTICO — confirmar as horas';
+function marcoRegistos(){            // a partir de que momento é que esta rede vigia
+  try{ var m = localStorage.getItem('q_marco_registos');
+       if(!m){ m = String(nowTs()); localStorage.setItem('q_marco_registos', m); }
+       return Number(m) || 0; }catch(e){ return 0; }
+}
+function registarSessao(j, w, motivo){
+  var ant = j.comentario;
+  if(motivo) j.comentario = (ant ? (ant + ' · ') : '') + motivo;
+  try{ enqueueRegisto(j, w, false); } finally { j.comentario = ant; }
+}
+// Fecha as sessões ainda abertas de um trabalho E garante que todas ficam registadas.
+// A hora de fim nunca passa do fim do turno em que a sessão começou: um trabalho
+// esquecido de ontem não pode dar trinta horas.
+function fecharSessoesComRegisto(j, motivo){
+  var n = 0, desde = marcoRegistos();
+  (j.workers||[]).forEach(function(w){
+    if(!w.endTs){
+      if(w.status==='paused'){ try{ closeWorkerPause(w); }catch(e){} }
+      w.endTs = Math.min(nowTs(), limiteTurno(w.startTs));
+      w.status = 'parado';
+    }
+    if(w._reg || w.endTs < desde){ w._reg = true; return; }   // já registado (ou de antes desta versão)
+    registarSessao(j, w, motivo || MARCA_AUTO); n++;
+  });
+  return n;
+}
+// Varre o que ficou por registar, venha de onde vier — inclusive de caminhos que ainda
+// não conhecemos. Só olha para sessões terminadas DEPOIS de esta versão entrar: as
+// antigas já foram enviadas e não se reescrevem.
+function varrerRegistosEmFalta(){
+  var desde = marcoRegistos(), n = 0;
+  (state.jobs||[]).forEach(function(j){
+    (j.workers||[]).forEach(function(w){
+      if(!w.endTs || w._reg) return;
+      if(w.endTs < desde){ w._reg = true; return; }
+      if(nowTs() - w.endTs < 120000) return;      // dois minutos de folga ao caminho normal
+      registarSessao(j, w, MARCA_AUTO); n++;
+    });
+  });
+  if(n) save();
+  return n;
+}
+setInterval(varrerRegistosEmFalta, 120000);
+// Os pins vão para a folha como "6522,7997,2040" e voltam de lá "652279972040" — a folha
+// come as vírgulas. Todos os pins têm 4 dígitos, por isso corta-se de 4 em 4. Sem isto
+// NENHUM trabalho de equipa era recuperado: ficava sem operadores reconhecidos.
+function pinsDaLinha(s){
+  var l = String(s||'').split(',').map(function(x){ return x.trim(); }).filter(Boolean);
+  if(l.length===1 && /^\d{8,}$/.test(l[0]) && l[0].length % 4 === 0){
+    var t = l[0]; l = []; for(var i=0; i<t.length; i+=4) l.push(t.substr(i,4));
+  }
+  return l;
+}
 function ehEmbalamento(j){ return /embalamento/i.test(j.unidade||'') || /embalamento/i.test(j.operacao||''); }
 function enqueueRegisto(j,wk,concluida){
   // Um registo POR SÉRIE. O quiosque SÓ regista tempos — NUNCA conclui a caixa.
@@ -1112,6 +1174,7 @@ function enqueueRegisto(j,wk,concluida){
       Quantidade:'1', Plano:j.plano, Comentarios:(state.cfg&&state.cfg.modoTeste?'TESTE':(j.comentario||'')), CaixaConcluida:caixaConcl, OperacaoConcluida:(concluida?'Sim':'Nao'),
       Equipa:String((j.workers||[]).length), ConcluidoPor:(concluida?(j.terminadoPor||wk.op):''), DataHoraRegisto:dh });
   });
+  try{ wk._reg = true; }catch(e){}   // esta sessão já tem registo — a rede não volta a escrever
   saveQueue(q); syncQueue();
 }
 var _syncing=false;
@@ -1336,7 +1399,7 @@ function recuperarTrabAbertos(rows){
     const jid=String(x.JobID||''); if(!jid) continue;
     if((state.jobs||[]).some(j=>String(j.id)===jid)) continue;      // já cá está
     const ts=trabTs(g.prim.DataHoraRegisto)||nowTs();
-    const workers=String(x.Pins||'').split(',').map(s=>s.trim()).filter(Boolean).map(p=>{
+    const workers=pinsDaLinha(x.Pins).map(p=>{
       const o=(state.cfg.operadores||[]).find(y=>String(y.pin)===p);
       return o?{op:o.nome, opCurto:curto(o.nome), pin:p, startTs:ts, pauses:[], status:'running', endTs:null}:null;
     }).filter(Boolean);
@@ -1367,7 +1430,7 @@ async function reconcileTrabAbertos(){
     const fechados={}; rows.forEach(x=>{ if(!x.ID) return; const e=String(x.Estado||''); if(e==='fechado'||e==='fechar') fechados[String(x.ID)]=true; });
     let mudou=false;
     (state.jobs||[]).forEach(j=>{ if(j.status==='done') return; const id=deviceName()+'|'+j.id;
-      if(fechados[id]){ (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } }); j.status='done'; marcarTrabFechado(id); mudou=true; } });
+      if(fechados[id]){ fecharSessoesComRegisto(j, 'FECHO À DISTÂNCIA'); j.status='done'; marcarTrabFechado(id); mudou=true; } });
     if(mudou){ save(); if(state.view==='board') render(); }
     recuperarTrabAbertos(rows);
   }catch(e){}
