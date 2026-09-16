@@ -1485,7 +1485,9 @@ function trNovo(){
   const agora=nowTs(); const d=new Date(agora);
   const worker={ op:op.nome, opCurto:curto(op.nome), pin:op.pin, startTs:agora, pauses:[], status:'running', endTs:null };
   const relId='ENT-'+dstr(agora).replace(/-/g,'')+'-'+two(d.getHours())+two(d.getMinutes())+'-'+trNorm(curto(op.nome)).replace(/[^a-z]/g,'').slice(0,10);
+  // a matrícula do camião vem do config (entregasANN.guia.viatura); o que se escrever no tablet fica a mandar
   let viat=''; try{ viat=localStorage.getItem('q_tr_viatura')||''; }catch(e){}
+  if(!viat) viat=trGuiaCfg().viatura||'';
   const j={ id:'J'+agora, artigo:(o.artigos&&o.artigos[0])||'Transporte', programa:o.programa||'Transporte', operacao:o.operacao, unidade:o.unidade,
     modo:'Stock', series:['TRANSP-'+String(agora).slice(-6)], plano:'', dia:dstr(agora), status:'open', workers:[worker],
     transp:{ fase:'carga', destino:'ANN', relId, caixas:[], guia:{numero:'',codigoAT:''}, viatura:viat, ts:{inicio:agora}, gps:{},
@@ -1528,10 +1530,10 @@ function trErrosFase(j,fase){
 function trIrFase(j,fase){
   const t=j.transp; const er=trErrosFase(j,t.fase);
   if(er.length){ state._trErros=er; render(); window.scrollTo(0,0); return; }
-  state._trErros=[]; t.fase=fase; if(fase==='rececao') trGps(j,'rececao');
+  state._trErros=[]; state._trPasso=null; t.fase=fase; if(fase==='rececao') trGps(j,'rececao');
   save(); render(); window.scrollTo(0,0);
 }
-function trVoltar(j,fase){ j.transp.fase=fase; state._trErros=[]; save(); render(); window.scrollTo(0,0); }
+function trVoltar(j,fase){ j.transp.fase=fase; state._trErros=[]; state._trPasso=null; save(); render(); window.scrollTo(0,0); }
 function trGps(j,qual){
   if(!navigator.geolocation) return;
   try{ navigator.geolocation.getCurrentPosition(p=>{ j.transp.gps[qual]={lat:p.coords.latitude, lon:p.coords.longitude, prec:Math.round(p.coords.accuracy), ts:nowTs()}; delete j.transp.gps[qual+'Erro']; save(); },
@@ -1552,7 +1554,7 @@ function trPartir(j){
       saveStockQ(q); t.stockRegistado=true; syncStockQ();
     }
   }
-  state._trErros=[]; t.fase='viagem'; save(); pushTrabAberto(j,'aberto'); window.scrollTo(0,0);
+  state._trErros=[]; state._trPasso=null; t.fase='viagem'; save(); pushTrabAberto(j,'aberto'); window.scrollTo(0,0);
   toast('Boa viagem — a saída para a ANN ficou registada no stock','ok');
 }
 function trChegada(j){ const t=j.transp; if(!t.ts.chegada){ t.ts.chegada=nowTs(); trGps(j,'chegada'); } t.fase='portaria'; save(); window.scrollTo(0,0); toast('Chegada à portaria registada às '+hhmm(t.ts.chegada),'ok'); }
@@ -1817,15 +1819,22 @@ async function trConcluir(j){
 function trLinhaHora(nome,ts){ return el('div',{class:'trh'}, el('small',{},nome), el('b',{}, ts?hhmm(ts):'—')); }
 function renderTransp(w,j){
   const t=j.transp; const fase=trFase(j);
-  w.append(backbar('board','🚚 Transporte para a ANN'));
+  // em metade do ecrã (ecrã dividido com o Portal) tudo o que não é o campo a copiar sai da frente
+  const soPasso0 = (fase==='guia' && state._trPasso!=null);
+  if(!soPasso0) w.append(backbar('board','🚚 Transporte para a ANN'));
   if(!trMeuWorker(j)){ w.append(el('div',{class:'flag'},'⛔ Este transporte é de '+((j.workers||[]).map(x=>x.opCurto).join(', ')||'outro motorista')+'. Só quem o começou o pode continuar.')); return; }
-  w.append(el('div',{class:'trcab'},
-    el('div',{}, el('div',{class:'sub'},'Desde o início'), el('div',{class:'trtotal','data-ttotal':j.id}, fmtDur(trTotalMs(j)))),
-    el('div',{class:'trhoras'}, trLinhaHora('Partida',t.ts.partida), trLinhaHora('Portaria',t.ts.chegada), trLinhaHora('Descarga',t.ts.descarga))));
-  if(t.ts.chegada) w.append(el('div',{class:'trespera'}, '⏳ Espera na ANN: ', el('b',{'data-tespera':j.id}, fmtDur(trEsperaMs(j))), t.ts.descarga?(' (até às '+hhmm(t.ts.descarga)+')'):' — a contar'));
-  const iF=TR_FASES.findIndex(f=>f.k===fase);
-  w.append(el('div',{class:'trfases'}, ...TR_FASES.map((f,i)=>el('span',{class:'trf'+(i===iF?' on':(i<iF?' feito':''))}, (i<iF?'✓ ':(i+1)+'. ')+f.t))));
-  if(state._trErros && state._trErros.length){
+  // No passo a passo da guia o ecrã fica só com o campo e o botão: no tablet ele está em metade
+  // do ecrã (ecrã dividido, com o Portal na outra metade) e o cabeçalho não deixava caber nada.
+  const soPasso = soPasso0;
+  if(!soPasso){
+    w.append(el('div',{class:'trcab'},
+      el('div',{}, el('div',{class:'sub'},'Desde o início'), el('div',{class:'trtotal','data-ttotal':j.id}, fmtDur(trTotalMs(j)))),
+      el('div',{class:'trhoras'}, trLinhaHora('Partida',t.ts.partida), trLinhaHora('Portaria',t.ts.chegada), trLinhaHora('Descarga',t.ts.descarga))));
+    if(t.ts.chegada) w.append(el('div',{class:'trespera'}, '⏳ Espera na ANN: ', el('b',{'data-tespera':j.id}, fmtDur(trEsperaMs(j))), t.ts.descarga?(' (até às '+hhmm(t.ts.descarga)+')'):' — a contar'));
+    const iF=TR_FASES.findIndex(f=>f.k===fase);
+    w.append(el('div',{class:'trfases'}, ...TR_FASES.map((f,i)=>el('span',{class:'trf'+(i===iF?' on':(i<iF?' feito':''))}, (i<iF?'✓ ':(i+1)+'. ')+f.t))));
+  }
+  if(!soPasso0 && state._trErros && state._trErros.length){
     const ul=el('ul',{style:'margin:6px 0 0;padding-left:18px'}); state._trErros.slice(0,8).forEach(e=>ul.append(el('li',{},e)));
     if(state._trErros.length>8) ul.append(el('li',{},'… e mais '+(state._trErros.length-8)));
     w.append(el('div',{class:'flag',style:'background:var(--alarmdim);border-color:#4a2029;color:var(--alarm)'}, el('b',{},'Falta completar:'), ul));
@@ -1885,13 +1894,23 @@ const TR_GUIA_PADRAO = { unidade:'UN', prefixoDescricao:'Caixa de embalagem',
     { id:'comp', curto:'ANN Compósitos (Lote B)', nome:'ANN Évora Estruturas em Compósitos, S.A.', nif:'508622732', morada:'Lote B, Parque de Indústria Aeronáutica de Évora, S/N',  codigoPostal:'7005-797', localidade:'Évora' } ] };
 function trGuiaCfg(){ const g=(state.cfg&&state.cfg.entregasANN&&state.cfg.entregasANN.guia)||{};
   return { unidade:g.unidade||TR_GUIA_PADRAO.unidade, prefixoDescricao:(g.prefixoDescricao!=null?g.prefixoDescricao:TR_GUIA_PADRAO.prefixoDescricao),
-    carga:g.carga||TR_GUIA_PADRAO.carga, destinatarios:(g.destinatarios&&g.destinatarios.length)?g.destinatarios:TR_GUIA_PADRAO.destinatarios }; }
+    carga:g.carga||TR_GUIA_PADRAO.carga, viatura:g.viatura||'', destinatarios:(g.destinatarios&&g.destinatarios.length)?g.destinatarios:TR_GUIA_PADRAO.destinatarios }; }
 function trDestinatario(t){ const ds=trGuiaCfg().destinatarios; let id=t.guia.dest; if(!id){ try{ id=localStorage.getItem('q_tr_dest')||''; }catch(e){} } return ds.find(d=>d.id===id)||ds[0]; }
 function trBens(j){ const g=trGuiaCfg(); const por={};
   j.transp.caixas.forEach(c=>{ const b=(por[c.artigo]=por[c.artigo]||{artigo:c.artigo,qtd:0,series:[]}); b.qtd+=(c.tipo==='lote'?(c.qtd||0):1); if(c.tipo!=='lote'&&c.serie) b.series.push(c.serie); });
   // "Caixa de embalagem Caixa para Ailerons" lia-se mal: nas caixas cujo nome já diz o que são, sem prefixo
-  return Object.values(por).map(b=>{ const pre=(g.prefixoDescricao && !/^(caixa|cxs?)\b/i.test(b.artigo)) ? g.prefixoDescricao+' ' : '';
-    return { descricao:(pre+b.artigo+(b.series.length?(' — séries '+b.series.join(', ')):'')).slice(0,200), qtd:b.qtd, unidade:g.unidade }; }); }
+  const linhas = Object.values(por).map(b=>{ const pre=(g.prefixoDescricao && !/^(caixa|cxs?)\b/i.test(b.artigo)) ? g.prefixoDescricao+' ' : '';
+    return { descricao:(pre+b.artigo+(b.series.length?(' — séries '+b.series.join(', ')):'')).slice(0,200), qtd:b.qtd, unidade:g.unidade }; });
+  // 16-09-2026: cada linha de bens são 3 campos a preencher no Portal. Com 3 tipos de caixa eram
+  // 9 campos só para os bens. Numa linha só, com tudo descrito e a quantidade total, são 3.
+  if(!trBensUmaLinha() || linhas.length<=1) return linhas;
+  const tudo = Object.values(por);
+  const total = tudo.reduce((s,b)=>s+b.qtd,0);
+  const desc = 'Caixas de embalagem: '+tudo.map(b=>b.artigo+' ('+b.qtd+')'+(b.series.length?(' séries '+b.series.join(',')):'')).join('; ');
+  if(desc.length>200) return linhas;   // não caberia numa descrição: melhor uma linha por caixa do que texto cortado
+  return [{ descricao:desc, qtd:total, unidade:g.unidade }];
+}
+function trBensUmaLinha(){ try{ return localStorage.getItem('q_tr_bens_uma')==='1'; }catch(e){ return false; } }
 function trNovoInicio(){ const d=new Date(nowTs()+10*60000); d.setSeconds(0,0); d.setMinutes(Math.ceil(d.getMinutes()/5)*5); return d.getTime(); }
 async function trCopiar(txt, botao){
   let ok=false;
@@ -1932,27 +1951,126 @@ function trCampoColar(j, rotulo, id, campo){
       el('input',{class:'search',style:'margin:0;flex:1',id,autocomplete:'off',value:t.guia[campo]||'',oninput:(e)=>{ t.guia[campo]=e.target.value; save(); }}),
       el('button',{class:'trcpb',onclick:()=>trColar(j,campo)},'📋 Colar')) ];
 }
+/* ---- preencher a guia campo a campo ----
+   16-09-2026: a guia é feita no tablet e o Portal não deixa duplicar uma anterior. Em ecrã
+   pequeno, andar à procura do campo certo na lista é pior do que escrever. Por isso há um modo
+   passo a passo: um campo de cada vez, em letra grande, com "Copiar e seguinte". O motorista
+   copia aqui, cola no Portal, e volta a tocar — sem deslizar nem procurar. Dá-se bem com o
+   ecrã dividido do Android (quiosque de um lado, Portal do outro). */
+function trCamposGuia(j){
+  const t=j.transp, g=trGuiaCfg(), d=trDestinatario(t), c=g.carga;
+  const dIni=new Date(t.guia.inicioTs||trNovoInicio());
+  const campos=[
+    {r:'Destinatário — NIF', v:d.nif},
+    {r:'Destinatário — Nome/Firma (o Portal costuma trazer sozinho)', v:d.nome},
+    {r:'Destinatário — Sede/Domicílio', v:d.morada},
+    {r:'Destinatário — C. Postal', v:d.codigoPostal},
+    {r:'Destinatário — Localidade', v:d.localidade},
+    {r:'Local de carga — Morada', v:c.morada},
+    {r:'Local de carga — C. Postal', v:c.codigoPostal},
+    {r:'Local de carga — Localidade', v:c.localidade},
+    {r:'Data de carga (AAAA-MM-DD)', v:dIni.getFullYear()+'-'+two(dIni.getMonth()+1)+'-'+two(dIni.getDate())},
+    {r:'Hora de carga (HH:MM)', v:hhmm(dIni.getTime())},
+    {r:'Matrícula do camião', v:t.viatura||''},
+    {r:'Local de descarga — Morada', v:d.morada},
+    {r:'Local de descarga — C. Postal', v:d.codigoPostal},
+    {r:'Local de descarga — Localidade', v:d.localidade},
+    {r:'Data de descarga (AAAA-MM-DD)', v:dIni.getFullYear()+'-'+two(dIni.getMonth()+1)+'-'+two(dIni.getDate())},
+    {r:'Hora de descarga (HH:MM)', v:hhmm(dIni.getTime()+30*60000)}
+  ];
+  trBens(j).forEach((b,i)=>{ campos.push({r:'Bem '+(i+1)+' — descrição', v:b.descricao}, {r:'Bem '+(i+1)+' — quantidade', v:String(b.qtd)}, {r:'Bem '+(i+1)+' — unidade', v:b.unidade}); });
+  return campos;
+}
+function trRenderPassoGuia(w,j){
+  const campos=trCamposGuia(j); const i=Math.max(0, Math.min(state._trPasso||0, campos.length));
+  w.append(el('p',{class:'lbl',style:'margin:2px 0 6px'},'Guia — campo a campo'));
+  if(i>=campos.length){
+    w.append(el('div',{class:'flag',style:'background:var(--rundim);border-color:#1c4a3c;color:var(--run)'},'✓ Copiaste todos os campos. Emite a guia no Portal e volta aqui para pôr o número.'));
+    w.append(el('button',{class:'big',onclick:()=>{ state._trPasso=null; render(); }},'Voltar aos dados da guia'));
+    return;
+  }
+  const c=campos[i];
+  w.append(el('div',{class:'trcab',style:'flex-direction:column;align-items:stretch;gap:6px'},
+    el('div',{class:'sub'},'Campo '+(i+1)+' de '+campos.length),
+    el('div',{style:'font-weight:700;font-size:15px;color:var(--cy)'}, c.r),
+    el('div',{style:'font-size:21px;font-weight:700;word-break:break-word;user-select:all;line-height:1.3'}, c.v||'—')));
+  const b=el('button',{class:'big',style:'padding:18px;font-size:18px'},'📋  Copiar e seguinte ›');
+  b.addEventListener('click', async ()=>{ if(c.v) await trCopiar(c.v,null); state._trPasso=i+1; render(); });
+  w.append(b);
+  w.append(el('div',{style:'display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px'},
+    el('button',{class:'back',onclick:()=>{ state._trPasso=Math.max(0,i-1); render(); }},'‹ Anterior'),
+    el('button',{class:'back',onclick:()=>{ state._trPasso=i+1; render(); }},'Saltar ›'),
+    el('button',{class:'back',onclick:()=>{ state._trPasso=null; render(); }},'✕ Sair')));
+}
+/* ---- favorito que preenche a guia no Portal ----
+   16-09-2026. No tablet, copiar e colar 17 campos é impraticável. O Portal não deixa duplicar
+   guias nem aceita ficheiro de quem não tem programa certificado, e não se pode preencher de
+   fora. O que dá: um FAVORITO (bookmarklet) guardado no browser. O quiosque põe os dados desta
+   entrega na área de transferência e o favorito, na página da guia, preenche os campos todos.
+   Preenche — nunca submete. Os nomes dos campos vieram da própria página do Portal
+   (guia portal.html em 3-Documentacao) e do emitirDocTranspForm.js. */
+function trPayloadGuia(j){
+  const t=j.transp, g=trGuiaCfg(), d=trDestinatario(t), c=g.carga;
+  const ini=new Date(t.guia.inicioTs||trNovoInicio());
+  const dia=ini.getFullYear()+'-'+two(ini.getMonth()+1)+'-'+two(ini.getDate());
+  const fim=new Date(ini.getTime()+30*60000);
+  return { nif:d.nif, nome:d.nome, morada:d.morada, cp:d.codigoPostal, loc:d.localidade,
+    cargaMorada:c.morada, cargaCp:c.codigoPostal, cargaLoc:c.localidade,
+    data:dia, hora:hhmm(ini.getTime()), descargaData:dia, descargaHora:hhmm(fim.getTime()),
+    matricula:t.viatura||'', bens:trBens(j).map(b=>({ d:b.descricao, q:b.qtd, u:b.unidade })) };
+}
+async function trCopiarPayload(j, botao){ return trCopiar(JSON.stringify(trPayloadGuia(j)), botao||null); }
+function trCodigoFavorito(){
+  return "javascript:(async()=>{try{var $=function(i){return document.getElementById(i)};var set=function(i,v){var e=$(i);if(!e||v==null||v==='')return 0;e.value=v;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return 1};var sel=function(i,re){var e=$(i);if(!e)return 0;var o=Array.prototype.slice.call(e.options).filter(function(x){return re.test(x.text)||re.test(x.value)})[0];if(!o)return 0;e.value=o.value;e.dispatchEvent(new Event('change',{bubbles:true}));return 1};var txt='';try{txt=await navigator.clipboard.readText()}catch(e){}if(!/^\\s*\\{/.test(txt))txt=prompt('Cola aqui os dados da guia (copiados no quiosque):','')||'';var d;try{d=JSON.parse(txt)}catch(e){alert('Os dados nao vieram no formato certo. No quiosque toca em Copiar dados para o favorito e tenta outra vez.');return}sel('tipoEmissaoId',/determinado/i);setTimeout(function(){sel('tipoDocumentoId',/guia de transporte/i)},700);var n=0;n+=set('customerTaxID',d.nif);n+=set('customerName',d.nome);n+=set('customerAddress_addressdetail',d.morada);n+=set('customerAddress_postalCode',d.cp);n+=set('customerAddress_city',d.loc);n+=set('addressFrom_addressdetail',d.cargaMorada);n+=set('addressFrom_postalCode',d.cargaCp);n+=set('addressFrom_city',d.cargaLoc);n+=set('dataCarga',d.data);n+=set('horaCarga',d.hora);n+=set('matricula',d.matricula);n+=set('addressTo_addressdetail',d.descargaMorada||d.morada);n+=set('addressTo_postalCode',d.descargaCp||d.cp);n+=set('addressTo_city',d.descargaLoc||d.loc);n+=set('dataDescarga',d.descargaData||d.data);n+=set('horaDescarga',d.descargaHora||d.hora);var bens=d.bens||[];var idx=function(){return Array.prototype.slice.call(document.querySelectorAll('[id^=\"productDescription_\"]')).map(function(e){return e.id.split('_')[1]})};var b=document.querySelector('.addNewLineBtn');var faltam=bens.length-idx().length;for(var k=0;k<faltam;k++){if(b)b.click()}setTimeout(function(){var ids=idx();bens.forEach(function(x,i){var s=ids[i];if(s==null)return;set('productDescription_'+s,x.d);set('quantity_'+s,String(x.q).replace('.',','));set('unitOfMeasure_'+s,x.u||'UN')});alert('Guia preenchida: '+n+' campos e '+bens.length+' linha(s) de bens.\\nConfere tudo e carrega em Emitir.')},900)}catch(e){alert('Nao consegui preencher: '+e.message)}})()";
+}
+function trMostrarFavorito(j){
+  const cod=trCodigoFavorito();
+  const m=document.createElement('div'); m.className='trmodal'; m.id='trModalFav';
+  m.innerHTML='<div class="trmodalbox" style="overflow:auto"><div class="trmodalh"><b>⭐ Favorito que preenche a guia</b><button class="back" data-a="fechar">Fechar</button></div>'+
+    '<div style="padding:14px;color:#10243e;font:14px/1.5 system-ui,sans-serif">'+
+    '<p><b>No computador:</b> arrasta este botão para a barra de favoritos:</p>'+
+    '<p><a id="trFavLink" href="#" style="display:inline-block;background:#0b5cab;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:700">🚚 Preencher guia</a></p>'+
+    '<p><b>No tablet (Chrome):</b> guarda uma página qualquer nos favoritos, abre os favoritos, edita esse favorito, apaga o endereço e cola lá o código. Chama-lhe <b>Preencher guia</b>. Depois, na página da guia, escreve "preencher" na barra de endereço e toca na sugestão do favorito.</p>'+
+    '<p><button id="trFavCopiar" style="background:#0b5cab;color:#fff;border:0;border-radius:8px;padding:10px 16px;font-weight:700">📋 Copiar o código do favorito</button></p>'+
+    '<textarea id="trFavCod" readonly style="width:100%;height:120px;font:11px/1.35 monospace;border:1px solid #dbe2ea;border-radius:8px;padding:8px"></textarea>'+
+    '<p style="color:#64748b">O favorito só preenche os campos. Nunca submete nada: confirmas sempre e carregas tu em Emitir.</p></div></div>';
+  document.body.appendChild(m);
+  const ta=m.querySelector('#trFavCod'); ta.value=cod;
+  m.querySelector('#trFavLink').setAttribute('href',cod);
+  m.querySelector('[data-a=fechar]').onclick=()=>m.remove();
+  m.querySelector('#trFavCopiar').onclick=async()=>{ const ok=await trCopiar(cod,null); m.querySelector('#trFavCopiar').textContent=ok?'✓ Código copiado':'Seleciona o texto e copia'; };
+}
 function trRenderGuia(w,j){
   const t=j.transp; const g=trGuiaCfg(); const dest=trDestinatario(t);
   if(!t.guia.inicioTs) t.guia.inicioTs=trNovoInicio();
   const ini=t.guia.inicioTs; const dIni=new Date(ini);
+  if(state._trPasso!=null){ trRenderPassoGuia(w,j); return; }
   w.append(el('p',{class:'lbl'},'2. Guia de transporte'));
-  w.append(el('div',{class:'flag'},'A guia tem de ser comunicada às Finanças ANTES de o camião sair. Abre o Portal e, em cada campo, toca em "Copiar" aqui e cola lá.'));
-  w.append(el('button',{class:'big ghost',onclick:()=>{ try{ window.open(TR_PORTAL,'_blank','noopener'); }catch(e){ location.href=TR_PORTAL; } }},'📄  Abrir o Portal das Finanças'));
+  w.append(el('div',{class:'flag'},'A guia tem de ser comunicada às Finanças ANTES de o camião sair. Abre o Portal e vai copiando daqui — o modo campo a campo é o mais rápido no tablet.'));
+  w.append(el('button',{class:'big ghost',onclick:async()=>{ await trCopiarPayload(j,null); toast('Dados copiados — no Portal usa o favorito "Preencher guia"','ok'); try{ window.open(TR_PORTAL,'_blank','noopener'); }catch(e){ location.href=TR_PORTAL; } }},'📄  Abrir o Portal (com os dados copiados)'));
+  w.append(el('div',{class:'row2',style:'margin-top:8px'},
+    el('button',{class:'big ghost',onclick:async(e)=>{ const ok=await trCopiarPayload(j,null); toast(ok?'Dados desta entrega copiados':'Não consegui copiar','ok'); }},'📋 Copiar dados p/ favorito'),
+    el('button',{class:'big ghost',onclick:()=>trMostrarFavorito(j)},'⭐ Ver/instalar favorito')));
   w.append(el('p',{class:'lbl'},'Para qual ANN?'));
   const seg=el('div',{class:'seg'});
   g.destinatarios.forEach(d=>seg.append(el('button',{class:'segbtn'+(d.id===dest.id?' on':''),onclick:()=>{ t.guia.dest=d.id; try{ localStorage.setItem('q_tr_dest',d.id); }catch(e){} save(); render(); }}, d.curto||d.nome)));
   w.append(seg);
   w.append(el('p',{class:'lbl'},'Matrícula do camião'), el('input',{class:'search',id:'trViat',autocomplete:'off',autocapitalize:'characters',value:t.viatura||'',
     oninput:(e)=>{ t.viatura=e.target.value; try{ localStorage.setItem('q_tr_viatura',e.target.value); }catch(x){} save(); }, onchange:()=>render()}));
+  w.append(el('button',{class:'big',style:'margin:14px 0 4px;padding:20px',onclick:()=>{ state._trPasso=0; render(); }},'▶️  Preencher a guia campo a campo'));
+  w.append(el('p',{class:'muted',style:'margin:0 0 8px'},'Um campo de cada vez, em letra grande. Em baixo fica a lista toda, se preferires.'));
+  w.append(el('div',{class:'seg',style:'margin:0 0 12px'},
+    el('button',{class:'segbtn'+(trBensUmaLinha()?'':' on'),onclick:()=>{ try{ localStorage.setItem('q_tr_bens_uma','0'); }catch(e){} render(); }},'Bens: uma linha por caixa'),
+    el('button',{class:'segbtn'+(trBensUmaLinha()?' on':''),onclick:()=>{ try{ localStorage.setItem('q_tr_bens_uma','1'); }catch(e){} render(); }},'Bens: uma linha só')));
   const c=g.carga;
   w.append(el('div',{class:'trcpgrupo'}, el('h4',{},'Destinatário / adquirente'),
     trLinhaCopia('NIF', dest.nif), trLinhaCopia('Nome', dest.nome), trLinhaCopia('Morada', dest.morada), trLinhaCopia('Código postal', dest.codigoPostal), trLinhaCopia('Localidade', dest.localidade)));
   w.append(el('div',{class:'trcpgrupo'}, el('h4',{},'Local de carga e início do transporte'),
     trLinhaCopia('Morada', c.morada), trLinhaCopia('Código postal', c.codigoPostal), trLinhaCopia('Localidade', c.localidade),
-    trLinhaCopia('Data de início', two(dIni.getDate())+'-'+two(dIni.getMonth()+1)+'-'+dIni.getFullYear()), trLinhaCopia('Hora de início', hhmm(ini)), trLinhaCopia('Matrícula', t.viatura||'')));
+    trLinhaCopia('Data de carga (AAAA-MM-DD)', dIni.getFullYear()+'-'+two(dIni.getMonth()+1)+'-'+two(dIni.getDate())), trLinhaCopia('Hora de carga', hhmm(ini)), trLinhaCopia('Matrícula', t.viatura||'')));
   w.append(el('button',{class:'rc',style:'margin:-2px 0 12px',onclick:()=>{ t.guia.inicioTs=trNovoInicio(); save(); render(); }},'🕒 Pôr a hora de início daqui a 10 min'));
-  w.append(el('div',{class:'trcpgrupo'}, el('h4',{},'Local de descarga'), trLinhaCopia('Morada', dest.morada), trLinhaCopia('Código postal', dest.codigoPostal), trLinhaCopia('Localidade', dest.localidade)));
+  w.append(el('div',{class:'trcpgrupo'}, el('h4',{},'Local de descarga'), trLinhaCopia('Morada', dest.morada), trLinhaCopia('Código postal', dest.codigoPostal), trLinhaCopia('Localidade', dest.localidade),
+    trLinhaCopia('Data de descarga (AAAA-MM-DD)', dIni.getFullYear()+'-'+two(dIni.getMonth()+1)+'-'+two(dIni.getDate())), trLinhaCopia('Hora de descarga', hhmm(ini+30*60000))));
   const gb=el('div',{class:'trcpgrupo'}, el('h4',{},'Bens transportados'));
   trBens(j).forEach((b,i)=>gb.append(trLinhaCopia('Linha '+(i+1)+' — descrição', b.descricao), trLinhaCopia('Linha '+(i+1)+' — quantidade', String(b.qtd)), trLinhaCopia('Linha '+(i+1)+' — unidade', b.unidade)));
   w.append(gb);
@@ -2022,6 +2140,17 @@ function trRenderRececao(w,j){
   w.append(el('p',{class:'lbl'},'6. Receção na ANN'));
   w.append(el('div',{class:'planobar',style:'display:block'}, el('div',{class:'sub'},'Quem recebe na ANN confirma que'),
     el('div',{style:'margin-top:6px;font-style:italic'}, '«Recebi as '+trNCaixas(j)+' caixa(s) identificadas neste relatório, conformes e no estado documentado nas fotografias'+(nDano?(', incluindo os '+nDano+' dano(s) assinalado(s)'):'')+'.»')));
+  // 16-09-2026 — "quando o da Aernnova assina não sabe o que está a assinar". Antes de assinar,
+  // mostra-se-lhe em letra grande o que vai no relatório: cada caixa, o estado e as horas; e um
+  // botão que abre o relatório com as fotografias, para ele ver antes de pôr o dedo.
+  const resumo=el('div',{class:'trcpgrupo'}, el('h4',{},'O que vai assinar'));
+  t.caixas.forEach((c,i)=>resumo.append(el('div',{class:'trcp'},
+    el('div',{class:'tv'}, el('small',{}, (i+1)+' · '+(c.tipo==='lote'?(c.qtd+' caixa(s), sem nº de série'):('série '+c.serie))), el('b',{}, c.artigo)),
+    el('span',{class:'badge '+(c.estado==='dano'?'pause':'run')}, c.estado==='dano'?'⚠ com dano':'✓ sem danos'))));
+  resumo.append(el('div',{class:'trcp'}, el('div',{class:'tv'}, el('small',{},'Horas'),
+    el('b',{}, 'chegada '+(t.ts.chegada?hhmm(t.ts.chegada):'—')+' · descarga '+(t.ts.descarga?hhmm(t.ts.descarga):'—')+' · espera '+trHM(trEsperaMs(j))))));
+  w.append(resumo);
+  w.append(el('button',{class:'big',style:'margin:4px 0 14px;padding:20px;font-size:17px',onclick:()=>trVerRelatorio(j)},'👁  Mostrar as fotos e o relatório a quem assina'));
   const dl=el('datalist',{id:'trdlrec'}); trRecetoresConhecidos().forEach(x=>dl.append(el('option',{value:x.nome})));
   w.append(el('p',{class:'lbl'},'Nome de quem recebe'), el('input',{class:'search',id:'trRecNome',list:'trdlrec',autocomplete:'off',value:r.nome||'',oninput:(e)=>trSetRecetor(j,'nome',e.target.value)}), dl);
   w.append(el('p',{class:'lbl'},'Email dessa pessoa (opcional — só fica no relatório)'), el('input',{class:'search',id:'trRecEmail',type:'email',inputmode:'email',autocomplete:'off',placeholder:'nome@aernnova.com',value:r.email||'',oninput:(e)=>trSetRecetor(j,'email',e.target.value)}));
