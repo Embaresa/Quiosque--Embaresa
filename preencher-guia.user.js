@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Embaresa — Preencher guia de transporte
 // @namespace    embaresa
-// @version      1.3.0
+// @version      1.4.0
 // @description  Põe um botão na página das guias do Portal das Finanças que enche os campos com os dados da entrega escolhidos no quiosque. Nunca submete nada.
 // @author       Embaresa PT
 // @match        https://faturas.portaldasfinancas.gov.pt/DocTransporte/*
@@ -344,8 +344,22 @@
 
     var intro = document.createElement('div');
     intro.style.cssText = 'font-size:12px;color:#64748b;margin-bottom:8px';
-    intro.textContent = 'Copia um destes e cola no quiosque, no campo da guia.';
+    intro.textContent = 'Copia e cola no quiosque, no campo da guia.';
     painel.appendChild(intro);
+
+    // Um so botao com tudo: o quiosque le este texto e enche o numero E o codigo de uma vez.
+    var tudo = dados.map(function (d) { return d.etiqueta + ': ' + d.valor; }).join('\n');
+    var bt = document.createElement('button');
+    bt.textContent = '📋 Copiar para o quiosque';
+    bt.style.cssText = 'width:100%;padding:16px;border:0;border-radius:10px;background:' + COR +
+                       ';color:#fff;font-size:16px;font-weight:700;margin-bottom:10px';
+    bt.onclick = function () { copiar(tudo, bt); };
+    painel.appendChild(bt);
+
+    var sub = document.createElement('div');
+    sub.style.cssText = 'font-size:11.5px;color:#64748b;margin:0 0 8px';
+    sub.textContent = 'Enche os dois campos de uma vez. Em baixo ficam os valores um a um, se precisares.';
+    painel.appendChild(sub);
 
     dados.forEach(function (d) {
       var linha = document.createElement('div');
@@ -375,8 +389,10 @@
 
   function dadosDoDetalhe() {
     var pares = [
-      { etiqueta: 'Nº da guia', de: 'Número de Documento' },
-      { etiqueta: 'ATCUD', de: 'ATCUD' },
+      // Estas etiquetas nao sao decorativas: e por elas que o quiosque percebe o que e o
+      // numero e o que e o codigo, quando se cola o texto todo de uma vez.
+      { etiqueta: 'Nº do documento', de: 'Número de Documento' },
+      { etiqueta: 'Código AT', de: 'ATCUD' },
       { etiqueta: 'Código de identificação', de: 'Código Identificação Documento' }
     ];
     var achados = [];
