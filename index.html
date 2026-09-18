@@ -1588,7 +1588,6 @@ function trErrosFase(j,fase){
   }
   if(fase==='rececao'){ const r=t.recetor;
     if(!String(r.nome||'').trim()) e.push('Escreve o nome de quem recebe na ANN.');
-    if(String(r.email||'').trim() && !trEmailOk(r.email)) e.push('O email da ANN não parece válido.');
     if(r.recusou){ if(!String(r.motivo||'').trim()) e.push('Escreve porque é que a ANN não assinou.'); }
     else if(!t.assinado.ann) e.push('Falta a assinatura de quem recebe na ANN.');
     if(!t.assinado.mot) e.push('Falta a assinatura do motorista.');
@@ -1724,6 +1723,13 @@ function trFotoSlot(j,uid,sk){ const c=j.transp.caixas.find(x=>x.uid===uid); if(
 function trFotoDano(j,uid){ const c=j.transp.caixas.find(x=>x.uid===uid); if(!c) return;
   trAbrirCamara({ titulo:trNomeCx(c)+' — dano', dica:'Aproxima: que se veja bem o dano.', multi:true, legenda:trLegenda(j,c,'DANO'), processar:(src,w,h,leg)=>trProcessarFoto(j,src,w,h,leg),
     onFoto:async(f)=>{ const k=j.id+'|'+uid+'|dano|'+Date.now()+Math.floor(Math.random()*1000); if(await trGuardarFoto(k,f)){ (c.danos=c.danos||[]).push(k); save(); render(); } } }); }
+// As tres fotos de cada caixa sao o minimo obrigatorio. Estas sao as de quem quer registar
+// mais alguma coisa - sem limite, e entram no relatorio a seguir as outras.
+function trFotoExtra(j,uid){ const c=j.transp.caixas.find(x=>x.uid===uid); if(!c) return;
+  trAbrirCamara({ titulo:trNomeCx(c)+' — foto extra', dica:'À vontade: o que te parecer que deve ficar registado.', multi:true, legenda:trLegenda(j,c,'EXTRA'), processar:(src,w,h,leg)=>trProcessarFoto(j,src,w,h,leg),
+    onFoto:async(f)=>{ const k=j.id+'|'+uid+'|extra|'+Date.now()+Math.floor(Math.random()*1000); if(await trGuardarFoto(k,f)){ (c.extras=c.extras||[]).push(k); save(); render(); } } }); }
+function trApagarExtra(j,uid,n){ const c=j.transp.caixas.find(x=>x.uid===uid); if(!c||!confirm('Apagar esta foto?')) return;
+  const k=c.extras[n]; c.extras.splice(n,1); delete _trThumb[k]; trDel('media',k).catch(()=>{}); trDel('mini',k).catch(()=>{}); save(); render(); }
 function trApagarDano(j,uid,n){ const c=j.transp.caixas.find(x=>x.uid===uid); if(!c||!confirm('Apagar esta foto do dano?')) return;
   const k=c.danos[n]; c.danos.splice(n,1); delete _trThumb[k]; trDel('media',k).catch(()=>{}); trDel('mini',k).catch(()=>{}); save(); render(); }
 
@@ -1740,7 +1746,6 @@ function trDestinatarios(j){ const ce=(state.cfg&&state.cfg.entregasANN)||{};
   todos.forEach(e=>{ const x=String(e||'').trim().toLowerCase(); if(trEmailOk(x)&&!v.has(x)){ v.add(x); ok.push(x); } }); return ok; }
 function trTextoDestinos(j){ return 'O relatório vai para: '+(trDestinatarios(j).join(', ')||'—')+' — a Sónia reencaminha para a ANN.'; }
 function trSetRecetor(j,campo,v){ const r=j.transp.recetor; r[campo]=v; save();
-  if(campo==='nome'){ const k=trRecetoresConhecidos().find(x=>trNorm(x.nome)===trNorm(v)&&x.email); const em=document.getElementById('trRecEmail'); if(k&&em&&!em.value.trim()){ em.value=k.email; r.email=k.email; save(); } }
   const d=document.getElementById('trDestinos'); if(d) d.textContent=trTextoDestinos(j); }
 function trSetRecusa(j,v){ const t=j.transp; t.recetor.recusou=v; if(v){ t.assinado.ann=false; delete _trSig[j.id+'|sig|ann']; trDel('mini',j.id+'|sig|ann').catch(()=>{}); } save(); render(); }
 function trLimparAss(j,key){ j.transp.assinado[key]=false; delete _trSig[j.id+'|sig|'+key]; trDel('mini',j.id+'|sig|'+key).catch(()=>{}); save(); render(); }
@@ -1769,6 +1774,7 @@ async function trGerarRelatorio(j){
   for(const c of t.caixas){
     for(const s of trSlots(c)){ const k=j.id+'|'+c.uid+'|'+s.k; try{ const m=await trGet('media',k); if(m) fotos[k]=m.full; }catch(e){} }
     for(const k of (c.danos||[])){ try{ const m=await trGet('media',k); if(m) fotos[k]=m.full; }catch(e){} }
+    for(const k of (c.extras||[])){ try{ const m=await trGet('media',k); if(m) fotos[k]=m.full; }catch(e){} }
   }
   const sig={}; for(const key of ['ann','mot']){ const k=j.id+'|sig|'+key; if(_trSig[k]) sig[key]=_trSig[k]; else { try{ const m=await trGet('mini',k); if(m&&m.sig) sig[key]=m.sig; }catch(e){} } }
   const nCx=trNCaixas(j); const nDano=t.caixas.filter(c=>c.estado==='dano').length; const motorista=((j.workers||[])[0]||{}).op||'';
@@ -1780,8 +1786,9 @@ async function trGerarRelatorio(j){
   const resumo=t.caixas.map((c,i)=>'<tr><td>'+(i+1)+'</td><td>'+E(c.artigo)+'</td><td>'+(c.tipo==='lote'?E(c.qtd)+' caixa(s)':'Série <b>'+E(c.serie)+'</b>')+'</td><td>'+pill(c)+'</td></tr>').join('');
   const cartoes=t.caixas.map((c,i)=>{
     const fs=trSlots(c).map(s=>{ const k=j.id+'|'+c.uid+'|'+s.k; return '<figure>'+(fotos[k]?'<img src="'+fotos[k]+'" alt="'+E(s.t)+'">':'<div class="semfoto">sem foto</div>')+'<figcaption>'+E(s.t)+(c.fotos&&c.fotos[s.k]?' · '+hhmm(c.fotos[s.k]):'')+'</figcaption></figure>'; }).join('');
+    const extras=(c.extras||[]).map((k,n)=> fotos[k]?('<figure><img src="'+fotos[k]+'" alt="Foto extra"><figcaption>Foto extra '+(n+1)+'</figcaption></figure>'):'').join('');
     const dano=c.estado==='dano'?('<div class="dano-box"><b>Dano assinalado na descarga:</b> '+E(c.danoDesc)+'</div><div class="fotos">'+(c.danos||[]).map((k,n)=>fotos[k]?('<figure><img src="'+fotos[k]+'" alt="Dano"><figcaption>Dano — foto '+(n+1)+'</figcaption></figure>'):'').join('')+'</div>'):'';
-    return '<section class="cx"><div class="cx-topo"><div><b>'+(i+1)+'. '+E(c.artigo)+'</b><br><span class="m">'+(c.tipo==='lote'?E(c.qtd)+' caixa(s) contadas por quantidade':'Nº de série '+E(c.serie))+'</span></div>'+pill(c)+'</div><div class="fotos">'+fs+'</div>'+dano+'</section>';
+    return '<section class="cx"><div class="cx-topo"><div><b>'+(i+1)+'. '+E(c.artigo)+'</b><br><span class="m">'+(c.tipo==='lote'?E(c.qtd)+' caixa(s) contadas por quantidade':'Nº de série '+E(c.serie))+'</span></div>'+pill(c)+'</div><div class="fotos">'+fs+extras+'</div>'+dano+'</section>';
   }).join('');
   const chk=TR_CHECK.map(q=>'<tr><td>'+E(q.t)+'</td><td class="'+(t.checklist[q.k]==='nao'?'nao':'sim')+'">'+(t.checklist[q.k]==='nao'?'Não':'Sim')+'</td></tr>').join('');
   const assAnn=t.recetor.recusou?('<div class="recusa">⚠ '+E(t.recetor.nome)+' (ANN) <b>não quis assinar</b>.<br>Motivo indicado: '+E(t.recetor.motivo)+'</div>'):(sig.ann?'<img class="sig" src="'+sig.ann+'" alt="Assinatura ANN">':'<div class="recusa">sem assinatura</div>');
@@ -1810,7 +1817,7 @@ async function trGerarRelatorio(j){
   '<table>'+linha('Início do transporte (carga)',hora(t.ts.inicio))+linha('Partida da Embaresa',hora(t.ts.partida))+linha('Chegada à portaria da ANN',hora(t.ts.chegada))+linha('Início da descarga',hora(t.ts.descarga))+linha('Receção confirmada',hora(fim))+'</table>'+
   '<h2>Dados da entrega</h2><table>'+linha('Data',dataPT(t.ts.inicio))+linha('Guia de transporte',guia)+(function(){ const d=trDestinatario(t); return linha('Destinatário da guia',E(d.nome)+(d.nif?(' · NIF '+E(d.nif)):'')); })()+linha('Motorista',E(motorista))+linha('Viatura',E(t.viatura||'—'))+
   linha('Local da chegada',gpsTxt(t.gps.chegada,t.gps.chegadaErro))+linha('Local da receção',gpsTxt(t.gps.rececao||t.gps.descarga,t.gps.rececaoErro))+
-  linha('Recebido na ANN por',E(t.recetor.nome)+(t.recetor.email?' &lt;'+E(t.recetor.email)+'&gt;':''))+linha('Caixas',nCx+' caixa(s) em '+t.caixas.length+' linha(s)')+'</table>'+
+  linha('Recebido na ANN por',E(t.recetor.nome))+linha('Caixas',nCx+' caixa(s) em '+t.caixas.length+' linha(s)')+'</table>'+
   '<h2>Resumo</h2><table><tr><th style="width:5%">#</th><th style="width:40%">Caixa</th><th>Identificação</th><th>Estado</th></tr>'+resumo+'</table>'+
   '<h2>Verificação na descarga</h2><table>'+chk+'</table>'+(String(t.observacoes||'').trim()?'<p><b>Observações:</b> '+E(t.observacoes)+'</p>':'')+
   '<h2>Caixa a caixa</h2><p class="m">Cada fotografia tem gravadas a data e a hora em que foi tirada, na descarga.</p>'+cartoes+
@@ -2178,7 +2185,7 @@ function trRenderDescarga(w,j){
   const t=j.transp; trCarregarMedia(j);
   const compl=t.caixas.filter(trCxCompleta).length;
   w.append(el('p',{class:'lbl'},'5. Descarga — fotos de cada caixa'));
-  w.append(el('div',{class:'chip',style:'margin-bottom:10px'}, compl+' de '+t.caixas.length+' completas · as fotos ficam com a data e a hora'));
+  w.append(el('div',{class:'chip',style:'margin-bottom:10px'}, compl+' de '+t.caixas.length+' completas · 3 fotos por caixa são o mínimo, podes tirar mais · ficam com data e hora'));
   t.caixas.forEach((c,i)=>{
     const ok=trCxCompleta(c); const card=el('div',{class:'trcx'+(ok?' ok':'')});
     card.append(el('div',{class:'trcxh'}, el('div',{}, el('b',{},(i+1)+'. '+c.artigo), el('div',{class:'sub'}, c.tipo==='lote'?(c.qtd+' caixa(s) — fotos do lote'):('Série '+c.serie))),
@@ -2187,6 +2194,11 @@ function trRenderDescarga(w,j){
     trSlots(c).forEach(s=>{ const th=_trThumb[j.id+'|'+c.uid+'|'+s.k];
       slots.append(el('button',{class:'trslot'+(c.fotos[s.k]?' cheio':''),onclick:()=>trFotoSlot(j,c.uid,s.k)}, th?el('img',{src:th,alt:''}):(c.fotos[s.k]?'✓':'📷'), el('span',{},s.t))); });
     card.append(slots);
+    // minimo tres (as de cima); daqui para baixo e quem quiser
+    const ex=el('div',{class:'trslots',style:'margin-top:8px'});
+    (c.extras||[]).forEach((k,n)=>{ const th=_trThumb[k]; ex.append(el('div',{class:'trslot cheio'}, th?el('img',{src:th,alt:''}):'✓', el('button',{class:'trx',onclick:()=>trApagarExtra(j,c.uid,n)},'✕'))); });
+    ex.append(el('button',{class:'trslot',onclick:()=>trFotoExtra(j,c.uid)},'📷', el('span',{},'Mais uma foto')));
+    card.append(ex);
     card.append(el('div',{class:'seg',style:'margin:10px 0 0'},
       el('button',{class:'segbtn'+(c.estado==='ok'?' on':''),onclick:()=>{ c.estado='ok'; save(); render(); }},'✅ Sem danos'),
       el('button',{class:'segbtn',style:c.estado==='dano'?'border-color:var(--pause);color:var(--pause);background:var(--pausedim)':'',onclick:()=>{ c.estado='dano'; save(); render(); }},'⚠️ Com dano')));
@@ -2228,7 +2240,8 @@ function trRenderRececao(w,j){
   w.append(el('button',{class:'big',style:'margin:4px 0 14px;padding:20px;font-size:17px',onclick:()=>trVerRelatorio(j)},'👁  Mostrar as fotos e o relatório a quem assina'));
   const dl=el('datalist',{id:'trdlrec'}); trRecetoresConhecidos().forEach(x=>dl.append(el('option',{value:x.nome})));
   w.append(el('p',{class:'lbl'},'Nome de quem recebe'), el('input',{class:'search',id:'trRecNome',list:'trdlrec',autocomplete:'off',value:r.nome||'',oninput:(e)=>trSetRecetor(j,'nome',e.target.value)}), dl);
-  w.append(el('p',{class:'lbl'},'Email dessa pessoa (opcional — só fica no relatório)'), el('input',{class:'search',id:'trRecEmail',type:'email',inputmode:'email',autocomplete:'off',placeholder:'nome@aernnova.com',value:r.email||'',oninput:(e)=>trSetRecetor(j,'email',e.target.value)}));
+  // O email da pessoa da ANN saiu daqui: nunca serviu para enviar nada (o relatório vai só
+  // para a Sónia, que reencaminha) e no tablet era mais uma coisa para escrever.
   w.append(el('div',{class:'muted',id:'trDestinos',style:'margin:-4px 0 12px'}, trTextoDestinos(j)));
   w.append(el('div',{class:'trsigh'}, el('b',{},'Assinatura de quem recebe (ANN)'), el('span',{class:'chip',id:'trStAnn'}, t.assinado.ann?'✓ assinado':'por assinar')));
   if(!r.recusou){ w.append(el('canvas',{class:'trsig',id:'trSigAnn'})); w.append(el('button',{class:'back',style:'margin-top:6px',onclick:()=>trLimparAss(j,'ann')},'Limpar')); }

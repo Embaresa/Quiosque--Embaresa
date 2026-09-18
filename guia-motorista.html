@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Entregas na Aernnova — guia do motorista</title>
+<!-- 18-09-2026. Feito para ser IMPRESSO e andar no camião, e para se abrir no tablet em caso
+     de dúvida. Os nomes dos botões aqui escritos são os que aparecem mesmo no quiosque. -->
+<style>
+  :root{
+    --tinta:#0f172a; --suave:#5b6b7a; --linha:#dfe6ee; --azul:#0b5cab;
+    --azulfraco:#eaf2fb; --aviso:#b45309; --avisofraco:#fff7ed;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:28px; background:#fff; color:var(--tinta);
+    font:15.5px/1.55 system-ui,Segoe UI,Roboto,Arial,sans-serif;
+    max-width:900px; margin-inline:auto;
+  }
+  header{ border-bottom:3px solid var(--tinta); padding-bottom:12px; margin-bottom:22px; }
+  h1{ font-size:1.7rem; margin:0 0 4px; letter-spacing:-.01em; }
+  header p{ margin:0; color:var(--suave); }
+  .passo{ display:flex; gap:16px; padding:16px 0; border-bottom:1px solid var(--linha); break-inside:avoid; }
+  .num{
+    flex:0 0 38px; height:38px; border-radius:50%; background:var(--tinta); color:#fff;
+    display:flex; align-items:center; justify-content:center; font-weight:700; font-size:1.05rem;
+  }
+  .corpo{ flex:1 1 auto; }
+  .corpo h2{ font-size:1.12rem; margin:6px 0 8px; }
+  .corpo p{ margin:0 0 8px; }
+  ul{ margin:0 0 8px; padding-left:20px; }
+  li{ margin-bottom:5px; }
+  .botao{
+    display:inline-block; background:var(--azulfraco); border:1px solid #c6dcf3; color:var(--azul);
+    border-radius:7px; padding:1px 8px; font-weight:700; white-space:nowrap;
+  }
+  .atencao{
+    background:var(--avisofraco); border:1px solid #fed7aa; border-left:5px solid var(--aviso);
+    border-radius:8px; padding:10px 12px; margin:10px 0 4px; color:#7c2d12;
+  }
+  .ouro{
+    margin-top:26px; border:2px solid var(--tinta); border-radius:12px; padding:18px 20px;
+    break-inside:avoid;
+  }
+  .ouro h2{ margin:0 0 10px; font-size:1.15rem; }
+  .ouro li{ margin-bottom:8px; }
+  footer{ margin-top:22px; color:var(--suave); font-size:13px; }
+  @media print{
+    body{ padding:0; font-size:11.5pt; max-width:none; }
+    .passo{ padding:11px 0; }
+    header{ margin-bottom:14px; }
+    .ouro{ margin-top:16px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Entregas na Aernnova — guia do motorista</h1>
+  <p>O que fazer, por ordem, desde o armazém até à assinatura. Tudo no tablet do camião.</p>
+</header>
+
+<div class="passo">
+  <div class="num">1</div>
+  <div class="corpo">
+    <h2>Antes de carregar</h2>
+    <ul>
+      <li>Abre o <b>Quiosque</b> no tablet e entra com o <b>teu PIN</b>.</li>
+      <li>Toca em <span class="botao">🚚 Transporte para a ANN</span>.</li>
+      <li>Escolhe as <b>caixas que vão no camião</b>.</li>
+    </ul>
+    <p>Confere bem a lista: <b>depois de partir já não se tiram caixas.</b></p>
+  </div>
+</div>
+
+<div class="passo">
+  <div class="num">2</div>
+  <div class="corpo">
+    <h2>A guia — tem de ser feita antes de sair</h2>
+    <ul>
+      <li>Toca em <span class="botao">📄 Abrir o Portal e preencher a guia</span>.</li>
+      <li>Se pedir para entrar, entra com o utilizador dos motoristas e toca outra vez nesse botão.</li>
+      <li>Na página das Finanças aparece em baixo, à direita, o botão azul
+          <span class="botao">🚚 Preencher guia</span>. Normalmente enche tudo sozinho; se não
+          encher, toca nele.</li>
+      <li><b>Confere</b> os campos e as linhas das caixas.</li>
+      <li>Só então carrega em <b>Emitir</b>.</li>
+      <li>Depois de emitida aparece o painel <b>Guia emitida</b>: toca em <span class="botao">📋 copiar</span>
+          no nº da guia, volta ao quiosque e <b>cola</b> no campo da guia.</li>
+      <li>Toca em <span class="botao">🚚 Partir para a ANN</span>.</li>
+    </ul>
+    <div class="atencao">
+      <b>Emitir não se desfaz.</b> Carregar em Emitir comunica a guia às Finanças. Faz isso
+      <b>só quando o camião vai mesmo sair</b>. Preencher e conferir não faz mal nenhum.
+    </div>
+  </div>
+</div>
+
+<div class="passo">
+  <div class="num">3</div>
+  <div class="corpo">
+    <h2>A caminho</h2>
+    <p>Não tens de fazer nada. O tempo de viagem conta sozinho. Guia o camião.</p>
+  </div>
+</div>
+
+<div class="passo">
+  <div class="num">4</div>
+  <div class="corpo">
+    <h2>À chegada, na portaria</h2>
+    <ul>
+      <li>Assim que chegas à portaria da Aernnova, toca em <span class="botao">🏁 Cheguei à portaria da ANN</span>.</li>
+    </ul>
+    <p>Toca <b>logo que chegas</b>, mesmo que ainda faltem horas para descarregar. É isto que
+       regista quanto tempo estivemos à espera — e essa espera é do cliente, não nossa.</p>
+  </div>
+</div>
+
+<div class="passo">
+  <div class="num">5</div>
+  <div class="corpo">
+    <h2>Descarga — as fotografias são o mais importante</h2>
+    <ul>
+      <li>Quando começarem a descarregar, toca em <span class="botao">📦 Começou a descarga</span>.</li>
+      <li><b>Antes de a caixa sair do camião</b>, fotografa-a: <b>Canto</b>, <b>Canto oposto</b> e
+          <b>Etiqueta / nº de série</b>.</li>
+      <li>Se alguma caixa já vier com dano, marca <span class="botao">⚠️ Com dano</span> e fotografa o dano.</li>
+    </ul>
+    <div class="atencao">
+      <b>Fotografa antes de descarregar.</b> Depois de a caixa estar no chão deles já não se prova
+      nada. É por causa destas fotografias que existe todo este trabalho.
+    </div>
+  </div>
+</div>
+
+<div class="passo">
+  <div class="num">6</div>
+  <div class="corpo">
+    <h2>Receção — a assinatura de quem recebe</h2>
+    <ul>
+      <li><b>Mostra</b> ao colaborador da Aernnova o que ele vai assinar — há um botão no tablet
+          para lhe mostrar as fotografias e o relatório.</li>
+      <li>Ele confirma que verificou as caixas, que estão conformes, e assina no ecrã.</li>
+      <li><b>Se não quiser assinar</b>, não faz mal: marca essa opção e <b>escreve o motivo</b> que
+          ele disser. Nunca deixes em branco.</li>
+      <li>Toca em <span class="botao">✅ Confirmar receção e concluir</span>.</li>
+    </ul>
+    <p>O relatório com as fotografias e os tempos segue sozinho por email. Acabou o teu trabalho.</p>
+  </div>
+</div>
+
+<div class="ouro">
+  <h2>Cinco regras de ouro</h2>
+  <ul>
+    <li><b>Emitir a guia só quando o camião vai mesmo sair.</b> É uma comunicação às Finanças.</li>
+    <li><b>Fotografar sempre antes de descarregar.</b> Depois já não serve de prova.</li>
+    <li><b>Registar a chegada logo à portaria</b>, mesmo que a descarga demore. A espera fica provada.</li>
+    <li><b>Sem rede não é problema.</b> O tablet guarda tudo e envia sozinho quando apanhar sinal.</li>
+    <li><b>Não concluir antes da assinatura</b> — ou, se ele não assinar, antes de escrever o motivo.</li>
+  </ul>
+</div>
+
+<footer>
+  Em caso de dúvida, fala com a Sónia antes de avançar. Mais vale uma pergunta do que uma guia
+  emitida a mais ou uma caixa descarregada sem fotografia.
+</footer>
+
+</body>
+</html>
