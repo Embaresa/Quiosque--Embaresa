@@ -1485,6 +1485,9 @@ function renderMeusTrabalhos(w){
    segue pelo fluxo "Enviar Relatorio QC" (o mesmo do QC) e, sem rede, fica em fila no tablet.
    ============================================================ */
 const TR_PORTAL = 'https://www.acesso.gov.pt/jsp/loginRedirectForm.jsp?path=DocTransporte%2FpainelRemetente.action&partID=SGDT';
+// A pagina do formulario, para a abrir ja com os dados no endereco. Se a sessao tiver
+// caducado o Portal desvia para o login e o endereco perde-se - basta entrar e tocar outra vez.
+const TR_PORTAL_GUIA = 'https://faturas.portaldasfinancas.gov.pt/DocTransporte/emitirDocTranspForm.action';
 const TR_URL_ENVIAR = 'https://defaultcade90c14fe343a3860494c20418f8.fb.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/09/workflows/633e49a3b93f41898c5c07626b3d1db6/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=67yNit8mamYQYVo_aRPAWOwgSGGfIH1NA0PDqX0I74w';
 const TR_EMAIL_EMBARESA = ['ssantos@embaresa.com'];
 const TR_FASES = [ {k:'carga',t:'Carga'}, {k:'guia',t:'Guia'}, {k:'viagem',t:'Viagem'}, {k:'portaria',t:'Portaria'}, {k:'descarga',t:'Descarga'}, {k:'rececao',t:'Receção'} ];
@@ -1563,7 +1566,9 @@ function trNovo(){
 function trCancelar(j){
   if(j.transp.ts.partida){ toast('Já partiste — conclui o transporte','err'); return; }
   if(!confirm('Cancelar este transporte?\n\nNão fica nada registado.')) return;
-  (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } });
+  // _reg = 'esta sessão já está tratada': sem isto a rede de segurança dos registos
+  // via uma sessão terminada sem registo e escrevia-a, contra o que aqui se promete.
+  (j.workers||[]).forEach(w=>{ if(!w.endTs){ w.endTs=nowTs(); w.status='parado'; } w._reg=true; });
   j.status='done'; save(); pushTrabAberto(j,'fechado'); trApagarMedia(j.id);
   state._trErros=[]; state.view='board'; toast('Transporte cancelado','ok');
 }
@@ -2093,7 +2098,7 @@ function trMostrarFavorito(j){
     '<div style="padding:14px;color:#10243e;font:14px/1.5 system-ui,sans-serif">'+
     '<p><b>No computador:</b> arrasta este botão para a barra de favoritos:</p>'+
     '<p><a id="trFavLink" href="#" style="display:inline-block;background:#0b5cab;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:700">🚚 Preencher guia</a></p>'+
-    '<p><b>No tablet (Chrome):</b> guarda uma página qualquer nos favoritos, abre os favoritos, edita esse favorito, apaga o endereço e cola lá o código. Chama-lhe <b>Preencher guia</b>. Depois, na página da guia, escreve "preencher" na barra de endereço e toca na sugestão do favorito.</p>'+
+    '<p><b>No tablet (Chrome):</b> guarda uma página qualquer nos favoritos, abre os favoritos, edita esse favorito, apaga o endereço e cola lá o código. Chama-lhe <b>pg</b> — duas letras, porque no tablet o nome tem de ser escrito à mão de cada vez. Depois, na página da guia, escreve <b>pg</b> na barra de endereço e toca na sugestão com a estrela.</p>'+
     '<p><button id="trFavCopiar" style="background:#0b5cab;color:#fff;border:0;border-radius:8px;padding:10px 16px;font-weight:700">📋 Copiar o código do favorito</button></p>'+
     '<textarea id="trFavCod" readonly style="width:100%;height:120px;font:11px/1.35 monospace;border:1px solid #dbe2ea;border-radius:8px;padding:8px"></textarea>'+
     '<p style="color:#64748b">O favorito só preenche os campos. Nunca submete nada: confirmas sempre e carregas tu em Emitir.</p></div></div>';
@@ -2110,7 +2115,14 @@ function trRenderGuia(w,j){
   if(state._trPasso!=null){ trRenderPassoGuia(w,j); return; }
   w.append(el('p',{class:'lbl'},'2. Guia de transporte'));
   w.append(el('div',{class:'flag'},'A guia tem de ser comunicada às Finanças ANTES de o camião sair. Abre o Portal e vai copiando daqui — o modo campo a campo é o mais rápido no tablet.'));
-  w.append(el('button',{class:'big ghost',onclick:async()=>{ await trCopiarPayload(j,null); toast('Dados copiados — no Portal usa o favorito "Preencher guia"','ok'); try{ window.open(TR_PORTAL,'_blank','noopener'); }catch(e){ location.href=TR_PORTAL; } }},'📄  Abrir o Portal (com os dados copiados)'));
+  // No tablet nao ha barra de favoritos: o favorito chama-se "pg" e chega-se a ele
+  // escrevendo essas duas letras na barra de endereco do Chrome.
+  w.append(el('div',{class:'flag',style:'border-color:#0b5cab;background:#eaf2fb;color:#0b3f74'},
+    '📌 Toca em "Abrir o Portal e preencher a guia". No Portal aparece em baixo, à direita, um botão azul 🚚 Preencher guia — e está feito. Se o Portal pedir para entrar, entra e volta aqui a tocar no botão. Se o botão azul não aparecer, é porque a extensão não está instalada nesse browser.'));
+  w.append(el('button',{class:'big',onclick:async()=>{ await trCopiarPayload(j,null);   // copiados tambem, para a extensao os ler da area de transferencia se preciso
+      const u = TR_PORTAL_GUIA + '#embaresa=' + encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(trPayloadGuia(j))))));
+      toast('A abrir o Portal com os dados desta entrega','ok');
+      try{ window.open(u,'_blank','noopener'); }catch(e){ location.href=u; } }},'📄  Abrir o Portal e preencher a guia'));
   w.append(el('div',{class:'row2',style:'margin-top:8px'},
     el('button',{class:'big ghost',onclick:async(e)=>{ const ok=await trCopiarPayload(j,null); toast(ok?'Dados desta entrega copiados':'Não consegui copiar','ok'); }},'📋 Copiar dados p/ favorito'),
     el('button',{class:'big ghost',onclick:()=>trMostrarFavorito(j)},'⭐ Ver/instalar favorito')));
