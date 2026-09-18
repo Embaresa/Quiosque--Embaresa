@@ -2148,7 +2148,9 @@ function trRenderGuia(w,j){
   w.append(el('button',{class:'big',onclick:async()=>{
       const u = TR_PORTAL_GUIA + '#embaresa=' + encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(trPayloadGuia(j))))));
       toast('A abrir o Portal com os dados desta entrega','ok');
-      try{ window.open(u,'_blank','noopener'); }catch(e){ location.href=u; } }},'📄  Abrir o Portal e preencher a guia'));
+      // separador COM NOME: obriga o browser a leva-lo ao endereco novo em vez de saltar
+      // para o que ja la estava com a entrega anterior a vista.
+      try{ const w=window.open(u,'embaresaGuia'); if(!w) location.href=u; else { try{ w.focus(); }catch(e2){} } }catch(e){ location.href=u; } }},'📄  Abrir o Portal e preencher a guia'));
   w.append(el('div',{class:'row2',style:'margin-top:8px'},
     el('button',{class:'big ghost',onclick:async(e)=>{ const ok=await trCopiarPayload(j,null); toast(ok?'Dados desta entrega copiados':'Não consegui copiar','ok'); }},'📋 Copiar dados p/ favorito'),
     el('button',{class:'big ghost',onclick:()=>trMostrarFavorito(j)},'⭐ Ver/instalar favorito')));
