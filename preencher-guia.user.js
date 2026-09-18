@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Embaresa — Preencher guia de transporte
 // @namespace    embaresa
-// @version      1.2.0
+// @version      1.3.0
 // @description  Põe um botão na página das guias do Portal das Finanças que enche os campos com os dados da entrega escolhidos no quiosque. Nunca submete nada.
 // @author       Embaresa PT
 // @match        https://faturas.portaldasfinancas.gov.pt/DocTransporte/*
@@ -195,13 +195,28 @@
       '. Confirma que é esta a entrega, ou volta ao quiosque e toca outra vez em "Abrir o Portal".', false);
   }
 
+  // Dados que nao vieram do quiosque agora NAO preenchem sozinhos. A area de transferencia
+  // guarda o que la esteve da ultima vez e ja encheu uma guia com a entrega anterior sem
+  // ninguem dar por isso.
+  function pedirConfirmacao(d) {
+    mostrarOrigem(d);
+    aviso('⚠ Estes dados não vieram do quiosque agora — estavam na memória de cópia do tablet e podem ser de outra entrega. Confere a linha acima antes de continuar.', false);
+    if (document.getElementById('embaresaConfirma')) return;
+    var b = document.createElement('button');
+    b.id = 'embaresaConfirma';
+    b.textContent = 'Preencher mesmo assim';
+    b.style.cssText = 'width:100%;margin-top:8px;padding:12px;border:1px solid #f5c2c2;border-radius:8px;background:#fff;color:#842029;font-weight:700';
+    b.onclick = function () { b.remove(); preencher(d); };
+    painel.appendChild(b);
+  }
+
   async function aoTocar() {
-    var d = interpretar(lerDoEndereco());          // o endereco manda sempre
-    if (!d) {
-      try { d = interpretar(await navigator.clipboard.readText()); } catch (e) { d = null; }
-    }
+    var d = interpretar(lerDoEndereco());          // so o endereco preenche sozinho
     if (d) { mostrarOrigem(d); preencher(d); return; }
-    aviso('Não encontrei os dados da entrega. Cola-os aqui em baixo.', false);
+    var c = null;
+    try { c = interpretar(await navigator.clipboard.readText()); } catch (e) { c = null; }
+    if (c) { pedirConfirmacao(c); return; }
+    aviso('Não encontrei os dados desta entrega. Volta ao quiosque e toca em "Abrir o Portal e preencher a guia".', false);
     caixaDeColar();
   }
 
