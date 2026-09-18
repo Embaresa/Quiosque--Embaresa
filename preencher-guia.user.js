@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Embaresa — Preencher guia de transporte
 // @namespace    embaresa
-// @version      1.1.0
+// @version      1.2.0
 // @description  Põe um botão na página das guias do Portal das Finanças que enche os campos com os dados da entrega escolhidos no quiosque. Nunca submete nada.
 // @author       Embaresa PT
 // @match        https://faturas.portaldasfinancas.gov.pt/DocTransporte/*
@@ -125,7 +125,7 @@
 
   /* ---------- painel ---------- */
 
-  var painel, msg;
+  var painel, msg, origem;
 
   function aviso(txt, bom) {
     if (!msg) return;
@@ -135,15 +135,26 @@
     msg.style.display = 'block';
   }
 
+  var doEndereco = null;   // o ultimo payload que chegou pelo endereco, ja descodificado
+
   function lerDoEndereco() {
     var m = /[#&]embaresa=([^&]+)/.exec(location.hash || '');
-    if (!m) return null;
+    if (!m) return doEndereco;          // ja foi lido antes: devolve-se o que se guardou
     try {
       var t = decodeURIComponent(escape(atob(decodeURIComponent(m[1]))));   // base64 → texto com acentos
       history.replaceState(null, '', location.pathname + location.search);  // não deixar os dados no endereço
+      doEndereco = t;
       return t;
-    } catch (e) { return null; }
+    } catch (e) { return doEndereco; }
   }
+
+  // O separador do Portal costuma ficar aberto: quando o quiosque manda a entrega seguinte,
+  // muda so o # e a pagina NAO recarrega. Sem isto, o script continuava com os dados antigos.
+  window.addEventListener('hashchange', function () {
+    if (!/[#&]embaresa=/.test(location.hash || '')) return;
+    var d = interpretar(lerDoEndereco());
+    if (d) { mostrarOrigem(d); preencher(d); }
+  });
 
   function interpretar(txt) {
     if (!txt || !/^\s*\{/.test(txt)) return null;
@@ -167,12 +178,29 @@
     ta.focus();
   }
 
+  // Sem isto ninguem dava pelo engano: o formulario enchia-se com ar de certo. Agora diz-se
+  // sempre de que entrega sao os dados e de que horas, e avisa-se a vermelho se forem velhos.
+  function mostrarOrigem(d) {
+    if (!origem) return;
+    var quando = d.ts ? new Date(d.ts) : null;
+    var hh = quando ? (('0'+quando.getHours()).slice(-2) + ':' + ('0'+quando.getMinutes()).slice(-2)) : null;
+    var nCx = (d.bens || []).length;
+    var velho = !quando || (Date.now() - d.ts > 2 * 3600 * 1000);
+    origem.textContent = (d.destino || 'Entrega') + ' · ' + nCx + ' linha(s) de bens' +
+                         (hh ? (' · dados das ' + hh) : ' · sem hora');
+    origem.style.color = velho ? '#842029' : '#5b6b7a';
+    origem.style.fontWeight = velho ? '700' : '400';
+    origem.style.display = 'block';
+    if (velho) aviso('⚠ Estes dados não são de agora' + (hh ? (' (são das ' + hh + ')') : '') +
+      '. Confirma que é esta a entrega, ou volta ao quiosque e toca outra vez em "Abrir o Portal".', false);
+  }
+
   async function aoTocar() {
-    var d = interpretar(lerDoEndereco());
+    var d = interpretar(lerDoEndereco());          // o endereco manda sempre
     if (!d) {
       try { d = interpretar(await navigator.clipboard.readText()); } catch (e) { d = null; }
     }
-    if (d) { preencher(d); return; }
+    if (d) { mostrarOrigem(d); preencher(d); return; }
     aviso('Não encontrei os dados da entrega. Cola-os aqui em baixo.', false);
     caixaDeColar();
   }
@@ -215,7 +243,11 @@
     nota.textContent = 'Só enche os campos. Confere sempre e és tu que carregas em Emitir.';
 
     painel.appendChild(topo);
+    origem = document.createElement('div');
+    origem.style.cssText = 'display:none;margin-top:8px;font-size:12.5px;color:#5b6b7a';
+
     painel.appendChild(b);
+    painel.appendChild(origem);
     painel.appendChild(msg);
     painel.appendChild(nota);
     document.body.appendChild(painel);

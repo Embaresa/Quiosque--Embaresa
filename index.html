@@ -2106,7 +2106,10 @@ function trPayloadGuia(j){
   return { nif:d.nif, nome:d.nome, morada:d.morada, cp:d.codigoPostal, loc:d.localidade,
     cargaMorada:c.morada, cargaCp:c.codigoPostal, cargaLoc:c.localidade,
     data:dia, hora:hhmm(ini.getTime()), descargaData:dia, descargaHora:hhmm(fim.getTime()),
-    matricula:t.viatura||'', bens:trBens(j).map(b=>({ d:b.descricao, q:b.qtd, u:b.unidade })) };
+    matricula:t.viatura||'', bens:trBens(j).map(b=>({ d:b.descricao, q:b.qtd, u:b.unidade })),
+    // Carimbo e referência: a extensão usa-os para dizer de que entrega são estes dados e
+    // para avisar quando são velhos — já aconteceu preencher a guia com a entrega anterior.
+    ts:nowTs(), ref:(t.relId||j.id||''), destino:(d.nome||'') };
 }
 async function trCopiarPayload(j, botao){ return trCopiar(JSON.stringify(trPayloadGuia(j)), botao||null); }
 function trCodigoFavorito(){
