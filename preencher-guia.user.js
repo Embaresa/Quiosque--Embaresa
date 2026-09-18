@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Embaresa — Preencher guia de transporte
 // @namespace    embaresa
-// @version      1.5.0
+// @version      1.6.0
 // @description  Põe um botão na página das guias do Portal das Finanças que enche os campos com os dados da entrega escolhidos no quiosque. Nunca submete nada.
 // @author       Embaresa PT
 // @match        https://faturas.portaldasfinancas.gov.pt/DocTransporte/*
@@ -281,26 +281,39 @@
      botão de copiar cada um. Procura-se pelo TEXTO da etiqueta e não por ids, que não conheço
      e mudam quando lhes apetece. */
 
-  function valorDaEtiqueta(nome) {
-    var alvo = null;
-    var etiquetas = document.querySelectorAll('label, .control-label, dt, th, span, div');
+  // Todos os campos com texto da pagina, por ordem.
+  function camposComValor() {
+    return Array.prototype.slice.call(document.querySelectorAll('input, textarea'))
+      .filter(function (e) { return e.value && e.value.trim(); });
+  }
+
+  // Procura o valor de um campo: primeiro ao pe da etiqueta, depois em toda a pagina - mas
+  // so aceita o que tiver a FORMA certa. Foi assim que se deixou de copiar datas.
+  function valorDaEtiqueta(nome, forma) {
+    var todos = camposComValor();
+    var etiquetas = document.querySelectorAll('label, .control-label, dt, th, span, div, td');
     for (var i = 0; i < etiquetas.length; i++) {
       var e = etiquetas[i];
       if (e.children.length) continue;                       // só quem tem texto próprio
       var txt = (e.textContent || '').replace(/\s+/g, ' ').trim();
       if (txt.toLowerCase() !== nome.toLowerCase()) continue;
-      // o campo costuma vir a seguir à etiqueta, ou ao lado dela dentro da mesma caixa
-      var cand = e.nextElementSibling;
-      if (cand && /^(INPUT|TEXTAREA)$/.test(cand.tagName) && cand.value) { alvo = cand.value; break; }
-      var caixa = e.parentElement;
-      for (var k = 0; k < 3 && caixa; k++) {
-        var inp = caixa.querySelector('input, textarea');
-        if (inp && inp.value && inp.value.trim()) { alvo = inp.value; break; }
-        caixa = caixa.parentElement;
+      // a partir da etiqueta, andar para a frente na pagina e ficar no primeiro que sirva
+      var depois = todos.filter(function (c) {
+        return (e.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+      });
+      for (var k = 0; k < depois.length; k++) {
+        var v = depois[k].value.trim();
+        if (!forma || forma.test(v)) return v;
       }
-      if (alvo) break;
     }
-    return alvo ? alvo.trim() : '';
+    // sem etiqueta que sirva: procurar na pagina inteira alguem com aquela forma
+    if (forma) {
+      for (var n = 0; n < todos.length; n++) {
+        var vv = todos[n].value.trim();
+        if (forma.test(vv)) return vv;
+      }
+    }
+    return '';
   }
 
   async function copiar(txt, botao) {
@@ -394,14 +407,18 @@
     var pares = [
       // Estas etiquetas nao sao decorativas: e por elas que o quiosque percebe o que e o
       // numero e o que e o codigo, quando se cola o texto todo de uma vez.
-      { etiqueta: 'Nº do documento', de: 'Número de Documento' },
-      { etiqueta: 'Código AT', de: 'ATCUD' },
-      { etiqueta: 'Código de identificação', de: 'Código Identificação Documento' }
+      // A 'forma' e o que impede de vir uma data ou outro campo qualquer no lugar deles.
+      { etiqueta: 'Nº do documento', de: 'Número de Documento',
+        forma: /^[A-Za-z][A-Za-z0-9 .\/-]{4,39}$/ },                       // GT ATDT202601GT/432
+      { etiqueta: 'Código AT', de: 'ATCUD',
+        forma: /^[A-Za-z0-9]{4,}-\d+$/ },                                 // J6ZK3XS9-432
+      { etiqueta: 'Código de identificação', de: 'Código Identificação Documento',
+        forma: /^\d{8,}$/ }                                               // 19714247848
     ];
     var achados = [];
     pares.forEach(function (p) {
-      var v = valorDaEtiqueta(p.de);
-      if (v) achados.push({ etiqueta: p.etiqueta, valor: v });
+      var v = valorDaEtiqueta(p.de, p.forma);
+      if (v && (!p.forma || p.forma.test(v))) achados.push({ etiqueta: p.etiqueta, valor: v });
     });
     return achados;
   }
