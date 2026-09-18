@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Embaresa — Preencher guia de transporte
 // @namespace    embaresa
-// @version      1.6.0
+// @version      1.7.0
 // @description  Põe um botão na página das guias do Portal das Finanças que enche os campos com os dados da entrega escolhidos no quiosque. Nunca submete nada.
 // @author       Embaresa PT
 // @match        https://faturas.portaldasfinancas.gov.pt/DocTransporte/*
@@ -360,7 +360,7 @@
 
     var intro = document.createElement('div');
     intro.style.cssText = 'font-size:12px;color:#64748b;margin-bottom:8px';
-    intro.textContent = 'Copia e cola no quiosque, no campo da guia.';
+    intro.textContent = 'Copia e cola no quiosque, no campo do nº da guia.';
     painel.appendChild(intro);
 
     // Um so botao com tudo: o quiosque le este texto e enche o numero E o codigo de uma vez.
@@ -374,7 +374,7 @@
 
     var sub = document.createElement('div');
     sub.style.cssText = 'font-size:11.5px;color:#64748b;margin:0 0 8px';
-    sub.textContent = 'Enche os dois campos de uma vez. Em baixo ficam os valores um a um, se precisares.';
+    sub.textContent = 'Enche o campo da guia no quiosque.';
     painel.appendChild(sub);
 
     dados.forEach(function (d) {
@@ -410,10 +410,8 @@
       // A 'forma' e o que impede de vir uma data ou outro campo qualquer no lugar deles.
       { etiqueta: 'Nº do documento', de: 'Número de Documento',
         forma: /^[A-Za-z][A-Za-z0-9 .\/-]{4,39}$/ },                       // GT ATDT202601GT/432
-      { etiqueta: 'Código AT', de: 'ATCUD',
-        forma: /^[A-Za-z0-9]{4,}-\d+$/ },                                 // J6ZK3XS9-432
-      { etiqueta: 'Código de identificação', de: 'Código Identificação Documento',
-        forma: /^\d{8,}$/ }                                               // 19714247848
+      // O ATCUD e o codigo de identificacao deixaram de ir para o quiosque: o relatorio
+      // leva so o numero da guia, e assim o motorista nao tem nada para escolher.
     ];
     var achados = [];
     pares.forEach(function (p) {

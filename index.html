@@ -1626,9 +1626,20 @@ function trPartir(j){
   state._trErros=[]; state._trPasso=null; t.fase='viagem'; save(); pushTrabAberto(j,'aberto'); window.scrollTo(0,0);
   toast('Boa viagem — a saída para a ANN ficou registada no stock','ok');
 }
-function trChegada(j){ const t=j.transp; if(!t.ts.chegada){ t.ts.chegada=nowTs(); trGps(j,'chegada'); } t.fase='portaria'; save(); window.scrollTo(0,0); toast('Chegada à portaria registada às '+hhmm(t.ts.chegada),'ok'); }
+function trChegada(j){ const t=j.transp;
+  // um toque sem querer aqui comeca a contar espera que nao existiu
+  if(!t.ts.chegada && !confirm('Chegaste agora à portaria da ANN?\n\nSão '+hhmm(nowTs())+'. A partir daqui começa a contar o tempo de espera.')) return;
+  if(!t.ts.chegada){ t.ts.chegada=nowTs(); trGps(j,'chegada'); } t.fase='portaria'; save(); window.scrollTo(0,0); toast('Chegada à portaria registada às '+hhmm(t.ts.chegada),'ok'); }
 function trComecarDescarga(j){
   const t=j.transp;
+  // Foi aqui que a capa do tablet, ao fechar, deu um toque e fechou a espera sozinha.
+  // A pergunta diz quanto tempo de espera se esta a fechar - assim ve-se logo o engano.
+  if(!t.ts.descarga){
+    const esp = t.ts.chegada ? Math.round((nowTs()-t.ts.chegada)/60000) : 0;
+    if(!confirm('Começaram mesmo a descarregar?\n\nSão '+hhmm(nowTs())+'.'+
+        (t.ts.chegada ? ('\n\nIsto fecha a espera na ANN em '+esp+' min.') : '')+
+        '\n\nSe foi sem querer, carrega em Cancelar.')) return;
+  }
   if(!t.ts.descarga){
     t.ts.descarga=nowTs(); trGps(j,'descarga');
     if(!t.esperaRegistada && t.ts.chegada){
@@ -1794,7 +1805,9 @@ async function trGerarRelatorio(j){
   }).join('');
   const chk=TR_CHECK.map(q=>'<tr><td>'+E(q.t)+'</td><td class="'+(t.checklist[q.k]==='nao'?'nao':'sim')+'">'+(t.checklist[q.k]==='nao'?'Não':'Sim')+'</td></tr>').join('');
   const assAnn=t.recetor.recusou?('<div class="recusa">⚠ '+E(t.recetor.nome)+' (ANN) <b>não quis assinar</b>.<br>Motivo indicado: '+E(t.recetor.motivo)+'</div>'):(sig.ann?'<img class="sig" src="'+sig.ann+'" alt="Assinatura ANN">':'<div class="recusa">sem assinatura</div>');
-  const guia=E(t.guia.numero||'—')+(t.guia.codigoAT?(' · código AT '+E(t.guia.codigoAT)):'');
+  // 18-09-2026 - a Sónia: no relatório vai só o nº da guia. O código AT continua guardado no
+  // quiosque (e serve para o caso de o nº faltar), mas não se mostra a quem recebe.
+  const guia=E(t.guia.numero||t.guia.codigoAT||'—');
   return '<!doctype html><html lang="pt"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrega '+E(t.relId)+'</title><style>'+
   'body{margin:0;background:#eef2f6;color:#10243e;font:14px/1.45 Arial,Helvetica,sans-serif}.pag{max-width:900px;margin:0 auto;background:#fff;padding:24px}'+
   'header{border-bottom:3px solid #0b5cab;padding-bottom:12px;margin-bottom:16px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-end}'+
@@ -1866,7 +1879,7 @@ async function trConcluir(j){
   const item={ id:t.relId, para:para.join(';'),
     assunto:'Entrega Embaresa na ANN · '+dataPT+' '+hhmm(t.ts.fim)+' · '+nCx+' caixa(s)'+(nDano?(' · '+nDano+' com dano'):' · sem danos')+' · espera '+trHM(esp),
     corpo:'Relatório de entrega de caixas da Embaresa PT na ANN.\n\n'+
-      'Entrega: '+t.relId+'\nData: '+dataPT+'\nGuia de transporte: '+(t.guia.numero||'—')+(t.guia.codigoAT?(' (código AT '+t.guia.codigoAT+')'):'')+'\n'+
+      'Entrega: '+t.relId+'\nData: '+dataPT+'\nGuia de transporte: '+(t.guia.numero||t.guia.codigoAT||'—')+'\n'+
       'Motorista: '+meu.op+(t.viatura?(' · Viatura '+t.viatura):'')+'\n'+
       'Partida: '+(t.ts.partida?hhmm(t.ts.partida):'—')+' · Chegada à portaria: '+(t.ts.chegada?hhmm(t.ts.chegada):'—')+' · Início da descarga: '+(t.ts.descarga?hhmm(t.ts.descarga):'—')+' · Receção: '+hhmm(t.ts.fim)+'\n'+
       'Espera na ANN: '+trHM(esp)+'\n'+
