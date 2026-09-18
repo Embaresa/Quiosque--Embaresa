@@ -2151,7 +2151,8 @@ function trRenderGuia(w,j){
   // com a entrega anterior a vista. O endereco e refeito no toque, com os dados de agora.
   w.append(el('a',{class:'big', href:TR_PORTAL_GUIA, target:'embaresaGuia',
       style:'display:block;text-align:center;text-decoration:none',
-      onclick:(ev)=>{ try{ ev.currentTarget.href = TR_PORTAL_GUIA + '#embaresa=' +
+      onclick:(ev)=>{ try{ trCopiarPayload(j,null); }catch(e){}   // o # perde-se nos saltos do Portal: os dados vao TAMBEM pela area de transferencia, com hora
+      try{ ev.currentTarget.href = TR_PORTAL_GUIA + '#embaresa=' +
             encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(trPayloadGuia(j)))))); }catch(e){}
         toast('A abrir o Portal com os dados desta entrega','ok'); }},
     '📄  Abrir o Portal e preencher a guia'));

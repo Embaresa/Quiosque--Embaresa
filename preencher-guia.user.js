@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Embaresa — Preencher guia de transporte
 // @namespace    embaresa
-// @version      1.4.0
+// @version      1.5.0
 // @description  Põe um botão na página das guias do Portal das Finanças que enche os campos com os dados da entrega escolhidos no quiosque. Nunca submete nada.
 // @author       Embaresa PT
 // @match        https://faturas.portaldasfinancas.gov.pt/DocTransporte/*
@@ -211,10 +211,13 @@
   }
 
   async function aoTocar() {
-    var d = interpretar(lerDoEndereco());          // so o endereco preenche sozinho
+    var d = interpretar(lerDoEndereco());
     if (d) { mostrarOrigem(d); preencher(d); return; }
     var c = null;
     try { c = interpretar(await navigator.clipboard.readText()); } catch (e) { c = null; }
+    // Fresca (menos de 5 minutos) e o caminho normal: o quiosque acabou de a copiar ao
+    // abrir esta pagina. Velha ou sem hora e que e suspeita - pode ser de outra entrega.
+    if (c && c.ts && (Date.now() - c.ts) < 5 * 60 * 1000) { mostrarOrigem(c); preencher(c); return; }
     if (c) { pedirConfirmacao(c); return; }
     aviso('Não encontrei os dados desta entrega. Volta ao quiosque e toca em "Abrir o Portal e preencher a guia".', false);
     caixaDeColar();
