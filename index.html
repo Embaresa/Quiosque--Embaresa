@@ -1577,7 +1577,9 @@ function trCancelar(j){
 function trErrosFase(j,fase){
   const t=j.transp; const e=[];
   if(fase==='carga'){ if(!t.caixas.length) e.push('Escolhe as caixas que vão no camião.'); }
-  if(fase==='guia'){ if(!String(t.guia.numero||'').trim() && !String(t.guia.codigoAT||'').trim()) e.push('Escreve o nº da guia ou o código AT — a guia tem de estar feita antes de partir.'); }
+  if(fase==='guia'){ const gn=String(t.guia.numero||'').trim(), ga=String(t.guia.codigoAT||'').trim();
+    if(!gn && !ga) e.push('Escreve o nº da guia ou o código AT — a guia tem de estar feita antes de partir.');
+    else if((gn && !trGuiaValida(gn)) || (ga && !trGuiaValida(ga))) e.push('O que está no campo da guia não parece um nº nem um código AT. Copia-o do painel azul do Portal.'); }
   if(fase==='descarga'){
     t.caixas.forEach((c,i)=>{ const nm=(i+1)+'. '+trNomeCx(c);
       const falta=trSlots(c).filter(s=>!(c.fotos&&c.fotos[s.k])).map(s=>s.t); if(falta.length) e.push(nm+': falta a foto '+falta.join(', '));
@@ -2010,20 +2012,32 @@ function trExtrairGuia(txt){
   const nr=s.match(/(?:n\.?\s*[ºo°]\s*(?:do\s+)?(?:documento|guia)?|n[úu]mero(?:\s+do\s+documento)?)\s*[:\-–]?\s*([A-Z0-9][A-Z0-9 .\/\-]{1,30}[A-Z0-9])/i); if(nr) r.numero=nr[1].trim();
   return r;
 }
+// Um numero de guia e curto: "GT ATDT202601GT/432" ou um ATCUD "J6ZK3XS9-432". Tudo o que
+// venha com chavetas, aspas ou tamanho de texto nao e numero nenhum - e quase sempre o
+// payload dos dados, que ja esteve na area de transferencia.
+function trLimpaGuia(v){ return String(v||'').replace(/[\r\n]+/g,' ').trim().slice(0,40); }
+function trGuiaValida(v){ v=trLimpaGuia(v); if(!v) return false;
+  if(/[\{\}\[\]"]/.test(v)) return false;        // JSON, de certeza que nao
+  if(v.length>40) return false;
+  return /^[A-Za-z0-9][A-Za-z0-9 ._\/\-]*$/.test(v) && /\d/.test(v); }
 async function trColar(j, campo){
   const t=j.transp; let txt='';
   try{ if(navigator.clipboard && navigator.clipboard.readText) txt=await navigator.clipboard.readText(); }catch(e){ txt=''; }
   if(!txt || !txt.trim()){ const inp=document.getElementById(campo==='numero'?'trGuiaNum':'trGuiaAT'); if(inp) inp.focus(); toast('Não consegui ler o que copiaste — toca no campo e escolhe "Colar"','err'); return; }
   const ex=trExtrairGuia(txt);
   if(ex.numero||ex.codigoAT){ if(ex.numero) t.guia.numero=ex.numero; if(ex.codigoAT) t.guia.codigoAT=ex.codigoAT; }
-  else t.guia[campo]=txt.trim().split(/\r?\n/)[0].slice(0,60);
+  else {
+    const v=trLimpaGuia(txt.split(/\r?\n/)[0]);
+    if(!trGuiaValida(v)){ toast('Isso não é o nº da guia. No Portal, no painel azul "Guia emitida", toca em 📋 copiar.','err'); return; }
+    t.guia[campo]=v;
+  }
   save(); toast('Colado','ok');
 }
 function trCampoColar(j, rotulo, id, campo){
   const t=j.transp;
   return [ el('p',{class:'lbl'},rotulo),
     el('div',{style:'display:flex;gap:8px;align-items:stretch;margin-bottom:12px'},
-      el('input',{class:'search',style:'margin:0;flex:1',id,autocomplete:'off',value:t.guia[campo]||'',oninput:(e)=>{ t.guia[campo]=e.target.value; save(); }}),
+      el('input',{class:'search',style:'margin:0;flex:1',id,autocomplete:'off',maxlength:'40',value:t.guia[campo]||'',oninput:(e)=>{ t.guia[campo]=trLimpaGuia(e.target.value); save(); }}),
       el('button',{class:'trcpb',onclick:()=>trColar(j,campo)},'📋 Colar')) ];
 }
 /* ---- preencher a guia campo a campo ----
@@ -2126,7 +2140,9 @@ function trRenderGuia(w,j){
   // escrevendo essas duas letras na barra de endereco do Chrome.
   w.append(el('div',{class:'flag',style:'border-color:#0b5cab;background:#eaf2fb;color:#0b3f74'},
     '📌 Toca em "Abrir o Portal e preencher a guia". No Portal aparece em baixo, à direita, um botão azul 🚚 Preencher guia — e está feito. Se o Portal pedir para entrar, entra e volta aqui a tocar no botão. Se o botão azul não aparecer, é porque a extensão não está instalada nesse browser.'));
-  w.append(el('button',{class:'big',onclick:async()=>{ await trCopiarPayload(j,null);   // copiados tambem, para a extensao os ler da area de transferencia se preciso
+  // NAO se copia aqui o payload: ia para a area de transferencia e, no fim, era ELE que
+  // aparecia ao colar o numero da guia. Os dados viajam no #embaresa= do endereco.
+  w.append(el('button',{class:'big',onclick:async()=>{
       const u = TR_PORTAL_GUIA + '#embaresa=' + encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(trPayloadGuia(j))))));
       toast('A abrir o Portal com os dados desta entrega','ok');
       try{ window.open(u,'_blank','noopener'); }catch(e){ location.href=u; } }},'📄  Abrir o Portal e preencher a guia'));
