@@ -804,7 +804,8 @@ function fillPlanos(){
 LS.stockq='q_stock_queue'; LS.stockmap='q_stock_srv';
 function loadStockQ(){ try{return JSON.parse(localStorage.getItem(LS.stockq)||'[]');}catch(e){return[];} }
 function saveStockQ(q){ try{localStorage.setItem(LS.stockq,JSON.stringify(q));}catch(e){} }
-async function syncStockQ(){ const url=(state.cfg&&state.cfg.urlStock)||null; let q=loadStockQ(); if(!q.length||!url)return; const resto=[]; for(const reg of q){ if(reg.ID&&jaEnviado(reg.ID))continue; let ok=false; try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(reg)});ok=r.ok;}catch(e){ok=false;} if(ok)marcarEnviado(reg.ID); else resto.push(reg);} saveStockQ(resto); }
+var _syncingS=false;
+async function syncStockQ(){ if(_syncingS)return; const url=(state.cfg&&state.cfg.urlStock)||null; let q=loadStockQ(); if(!q.length||!url)return; _syncingS=true; const enviados={}; try{ for(const reg of q){ if(reg.ID&&jaEnviado(reg.ID))continue; let ok=false; try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(reg)});ok=r.ok;}catch(e){ok=false;} if(ok){ marcarEnviado(reg.ID); enviados[chaveFila(reg)]=1; } } } finally { try{ tirarDaFila(loadStockQ, saveStockQ, enviados); }catch(e){} _syncingS=false; } }
 async function loadStockMap(){ const url=(state.cfg&&state.cfg.urlStockLer)||null; if(!url)return; try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); if(r.ok){ let rows=await r.json(); if(!Array.isArray(rows))rows=(rows&&rows.value)||[]; localStorage.setItem(LS.stockmap,JSON.stringify(rows)); } }catch(e){} }
 function computeStock(){ let srv=[]; try{ srv=JSON.parse(localStorage.getItem(LS.stockmap)||'[]'); }catch(e){}
   const rows=srv.concat(loadStockQ()); const last={};
@@ -1177,26 +1178,45 @@ function enqueueRegisto(j,wk,concluida){
   try{ wk._reg = true; }catch(e){}   // esta sessão já tem registo — a rede não volta a escrever
   saveQueue(q); syncQueue();
 }
-var _syncing=false;
+// 30-09-2026 — AS FILAS PERDIAM REGISTOS. Cada envio lia a fila no inicio, esperava pelos
+// POSTs (segundos; minutos com rede fraca — tablet do camiao, Zebra) e no fim GRAVAVA POR
+// CIMA a fila inteira so com o que tinha falhado. O que entrasse na fila entretanto — o
+// registo do segundo operador, o passo seguinte do transporte — era apagado; e como o
+// enqueueRegisto ja tinha marcado a sessao como registada, a rede de seguranca nunca o
+// repunha. Cruzando os trabalhos fechados com os registos: 67 sessoes sem tempo em 6
+// semanas, metade no Tablet-Camiao e no Zebra. Agora, no fim, rele-se a fila e so se
+// tira o que foi mesmo enviado; o que entrou entretanto fica para a passagem seguinte.
+function chaveFila(r){ return (r && (r.ID || r.IDRegisto)) || JSON.stringify(r); }
+function tirarDaFila(load, save, enviados){
+  const vistos = {};
+  save(load().filter(r => {
+    const k = chaveFila(r), id = r && (r.ID || r.IDRegisto);
+    if(enviados[k] || (id && jaEnviado(id))) return false;   // enviado agora ou antes
+    if(vistos[k]) return false; vistos[k] = 1;              // repetido na fila
+    return true;
+  }));
+}var _syncing=false;
 async function syncQueue(){
   if(_syncing) return;                       // tranca: nunca dois envios em simultaneo (evitava duplicados)
   const url=(state.cfg && state.cfg.urlProducao)||null; // definido depois (fluxo Power Automate)
   let q=loadQueue(); if(!q.length)return;
   if(!url) return; // sem fluxo definido: fica em fila local (v0.1)
   _syncing=true;
-  const resto=[]; const vistos={};
+  const enviados={}; const vistos={};
   try{
     for(const reg of q){
       if(reg.ID && (jaEnviado(reg.ID) || vistos[reg.ID])) continue; // ja enviado / repetido na fila -> descarta
       if(reg.ID) vistos[reg.ID]=1;
       let ok=false;
       try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(reg)}); ok=r.ok; }catch(e){ ok=false; }
-      if(ok){ marcarEnviado(reg.ID); } else { resto.push(reg); }
+      if(ok){ marcarEnviado(reg.ID); enviados[chaveFila(reg)]=1; }
     }
-  } finally { _syncing=false; }
-  saveQueue(resto); render();
-}
-var _syncingP=false;
+  } finally {
+    try{ tirarDaFila(loadQueue, saveQueue, enviados); }catch(e){}   // rele: o que entrou entretanto FICA
+    _syncing=false;
+  }
+  render();
+}var _syncingP=false;
 async function syncPertQueue(){
   // Tranca + memoria do que ja foi enviado — o mesmo que o syncQueue dos registos ja
   // tinha e este nao. Sem isso, a paragem era enviada DUAS vezes: o enqueuePerturbacao
@@ -1208,7 +1228,7 @@ async function syncPertQueue(){
   let q=loadPertQ(); if(!q.length)return;
   if(!url) return; // sem fluxo definido: fica em fila local
   _syncingP=true;
-  const resto=[]; const vistos={};
+  const enviados={}; const vistos={};
   try{
     for(const reg of q){
       const id=reg.IDRegisto;
@@ -1216,10 +1236,12 @@ async function syncPertQueue(){
       if(id) vistos[id]=1;
       let ok=false;
       try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(reg)}); ok=r.ok; }catch(e){ ok=false; }
-      if(ok){ marcarEnviado(id); } else { resto.push(reg); }
+      if(ok){ marcarEnviado(id); enviados[chaveFila(reg)]=1; }
     }
-  } finally { _syncingP=false; }
-  savePertQ(resto);
+  } finally {
+    try{ tirarDaFila(loadPertQ, savePertQ, enviados); }catch(e){}   // rele: o que entrou entretanto FICA
+    _syncingP=false;
+  }
 }
 setInterval(()=>{ try{ syncQueue(); syncPertQueue(); syncStockQ(); }catch(e){} }, 30000); // reenvia as filas automaticamente (quando a rede volta)
 
