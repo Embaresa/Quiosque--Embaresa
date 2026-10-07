@@ -450,6 +450,7 @@ function render(){
     else if(state.view==='stockmov') renderStockMov(w);
     else if(state.view==='meustrab') renderMeusTrabalhos(w);
     else if(state.view==='fecharAntigos') renderFecharAntigos(w);
+    else if(state.view==='corrigir') renderCorrigir(w);
     else if(state.view==='operacao') renderOperacao(w);
     else if(state.view==='series') renderSeries(w);
     else if(state.view==='job') renderJob(w);
@@ -568,6 +569,128 @@ function renderFecharAntigos(w){
   w.append(el('button',{class:'big danger',style:'margin-top:14px',onclick:()=>{ if(confirm('Fechar TODOS os '+antigos.length+' trabalhos antigos?\n\nSaem todos do quadro. Correções de horas → Supervisor.')) fecharTodosAntigos(); }},'🧹  Fechar todos ('+antigos.length+')'));
 }
 
+/* ---- CORRIGIR O ARTIGO / A SÉRIE DE UM TRABALHO EM CURSO (só supervisor) ----
+   07-10-2026 — a Sónia: "eles entraram nos produtos errados, o lower kc é esquerdo e não
+   direito. podemos criar uma forma de eu corrigir". Três operadores a trabalhar há uma hora
+   no artigo errado e a única saída era concluir e começar de novo (ou emendar depois, registo
+   a registo, no Supervisor).
+   Entra-se tocando no trabalho e pondo o PIN DE SUPERVISOR em vez do PIN de operador.
+   Muda-se o artigo e/ou as séries do trabalho inteiro: a equipa e as horas ficam como estão.
+   O artigo do registo de produção é lido no fecho, por isso quem ainda está no trabalho sai
+   com o registo certo; quem JÁ saiu tem o registo enviado com o artigo antigo — avisa-se, e
+   esse emenda-se no Supervisor. O Painel e os Trabalhos Abertos apanham a mudança sozinhos
+   (batimento + pushTrabAberto, que compara a assinatura artigo|séries). */
+function abrirCorrigir(id){
+  const j=state.jobs.find(x=>x.id===id);
+  if(!j || j.status==='done'){ toast('Esse trabalho já está fechado — corrige-se no Supervisor.','err'); state.view='board'; return render(); }
+  if(j.transp){ toast('O transporte não se corrige aqui.','err'); state.view='board'; return render(); }
+  state.corr={ id:id, artigo:j.artigo, operacao:j.operacao, sel:(j.series||[]).slice(), outra:'', af:'', trocar:false };
+  state.view='corrigir'; render();
+}
+function artigosComOperacao(operacao){
+  const n=s=>String(s||'').trim().toLowerCase();
+  const tem=new Set(); ((state.cfg&&state.cfg.operacoes)||[]).forEach(o=>{ if(n(o.operacao)===n(operacao)) (o.artigos||[]).forEach(a=>tem.add(a)); });
+  return artigosAtivos().filter(a=>tem.has(a)).sort();
+}
+// As V2 têm operações com outro nome ("KC390-Montagem caixa" -> "KC390V2-Montagem caixa"): ao trocar
+// de artigo procura-se a operação com o mesmo nome depois do prefixo; se não houver, ela escolhe.
+function operacaoEquivalente(operacao, artigo){
+  const n=s=>String(s||'').trim().toLowerCase();
+  const ops=operacoesDoArtigo(artigo).map(o=>o.operacao);
+  if(ops.some(o=>n(o)===n(operacao))) return operacao;
+  const cauda=s=>n(String(s||'').replace(/^[^-]*-/,''));
+  const eq=ops.filter(o=>cauda(o)===cauda(operacao));
+  return eq.length===1 ? eq[0] : null;
+}
+function fillCorrArt(){ const list=$('#corrartlist'); if(!list||!state.corr)return; list.innerHTML='';
+  const c=state.corr; const j=state.jobs.find(x=>x.id===c.id); if(!j)return;
+  const f=(c.af||'').toLowerCase().trim();
+  const mesma=new Set(artigosComOperacao(j.operacao));
+  const base=artigosAtivos().slice().sort((a,b)=>(mesma.has(b)-mesma.has(a))||a.localeCompare(b));
+  const r=(f?base.filter(a=>a.toLowerCase().includes(f)):base).slice(0,150);
+  if(!r.length){ list.append(el('div',{class:'empty'},'Nenhum artigo com esta operação.')); return; }
+  r.forEach(a=>{ list.append(el('button',{class:'item',style:(a===c.artigo?'border-color:var(--cy)':''),onclick:()=>{ c.artigo=a; c.operacao=operacaoEquivalente(j.operacao,a); c.trocar=false; c.af=''; render(); }},
+    el('span',{class:'t'}, el('b',{},a), el('small',{}, progDoArtigo(a)+(a===j.artigo?' · o que está agora':''))), el('span',{class:'chev'},'›'))); });
+}
+function seriesDaCorrecao(){ const c=state.corr; const out=[]; (c.sel||[]).concat(parseSeries(c.outra)).forEach(s=>{ if(s && !out.includes(s)) out.push(s); }); return out; }
+function renderCorrigir(w){
+  const c=state.corr; const j=c && state.jobs.find(x=>x.id===c.id);
+  if(!j || j.status==='done'){ state.corr=null; state.view='board'; return render(); }
+  w.append(backbar('board','✏️ Corrigir trabalho'));
+  const ativos=jobWorkersAtivos(j).map(x=>x.opCurto).filter(Boolean);
+  const sairam=[...new Set((j.workers||[]).filter(x=>x.endTs).map(x=>x.opCurto).filter(Boolean))];
+  w.append(el('p',{class:'muted'}, j.operacao+' · a trabalhar: '+(ativos.join(', ')||'—')));
+  w.append(el('div',{class:'chip',style:'margin-bottom:10px'}, 'Está: '+j.artigo+' · '+((j.series||[]).join(' · ')||'sem série')));
+
+  w.append(el('p',{class:'lbl'},'Artigo certo'));
+  if(!c.trocar){
+    w.append(el('div',{class:'list'}, el('button',{class:'item',style:(c.artigo!==j.artigo?'border-color:var(--cy);background:#0f2831':''),onclick:()=>{ c.trocar=true; render(); }},
+      el('span',{class:'t'}, el('b',{},c.artigo), el('small',{}, c.artigo!==j.artigo?'novo — toca para escolher outro':'toca para trocar')), el('span',{class:'chev'},'✏️'))));
+  } else {
+    w.append(el('input',{class:'search',placeholder:'Procurar artigo…',value:c.af||'',oninput:(e)=>{c.af=e.target.value;fillCorrArt();}}));
+    w.append(el('div',{class:'list',id:'corrartlist',style:'max-height:46vh;overflow:auto'})); setTimeout(fillCorrArt,0);
+    w.append(el('button',{class:'mini',style:'margin-top:8px',onclick:()=>{ c.trocar=false; render(); }},'cancelar a troca'));
+    return;
+  }
+
+  if(c.operacao!==j.operacao){
+    w.append(el('p',{class:'lbl'}, c.operacao ? 'Operação (mudou com o artigo)' : 'Operação — este artigo não tem "'+j.operacao+'", escolhe a certa'));
+    const lo=el('div',{class:'list'});
+    operacoesDoArtigo(c.artigo).forEach(o=>{ const on=o.operacao===c.operacao;
+      lo.append(el('button',{class:'item',style:on?'border-color:var(--cy);background:#0f2831':'',onclick:()=>{ c.operacao=o.operacao; render(); }},
+        el('span',{class:'pfx',style:on?'color:var(--cy)':'color:var(--faint)'}, on?'✓':'○'), el('span',{class:'t'}, el('b',{},o.operacao), el('small',{}, postoDaUnidade(o.unidade))))); });
+    w.append(lo);
+  }
+
+  w.append(el('p',{class:'lbl'},'Séries deste trabalho'));
+  const enc=(state.enc||[]).filter(e=>e.artigo===c.artigo);
+  const daEnc=new Set(enc.map(e=>e.serie));
+  const fora=(c.sel||[]).filter(s=>!daEnc.has(s));          // marcadas mas que não são deste artigo
+  const list=el('div',{class:'list',style:'max-height:38vh;overflow:auto'});
+  const linha=(serie,sub,aviso)=>{ const on=c.sel.includes(serie);
+    list.append(el('button',{class:'item',style:(on?'border-color:var(--cy);background:#0f2831':'')+(aviso&&on?';border-color:#f2b84b':''),
+      onclick:()=>{ c.sel = on ? c.sel.filter(x=>x!==serie) : c.sel.concat([serie]); render(); }},
+      el('span',{class:'pfx',style:on?'color:var(--cy)':'color:var(--faint)'}, on?'✓':'○'),
+      el('span',{class:'t'}, el('b',{},serie), el('small',{}, sub)))); };
+  fora.forEach(s=>{ const e=(state.enc||[]).find(x=>String(x.serie||'').toUpperCase()===String(s).toUpperCase());
+    linha(s, e ? ('⚠ nas encomendas é de '+e.artigo+' — desmarca se não for esta') : 'não está nas encomendas (stock / escrita à mão)', !!e); });
+  enc.slice(0,300).forEach(e=>linha(e.serie, 'PO '+(e.po||'—')+' · '+(e.estado||'')));
+  if(list.children.length) w.append(list);
+  else w.append(el('div',{class:'flag'},'Sem séries deste artigo nas encomendas. Escreve a série em baixo.'));
+  w.append(el('input',{class:'search',style:'margin-top:8px',placeholder:'Outra série (escrever; várias separadas por espaço)',value:c.outra||'',oninput:(e)=>{c.outra=e.target.value;}}));
+
+  if(sairam.length) w.append(el('div',{class:'flag',style:'margin-top:10px'},'⚠ '+sairam.join(', ')+' já saiu(íram) deste trabalho: o registo dele(s) já seguiu com o artigo antigo. Esse corrige-se no Supervisor.'));
+  w.append(el('button',{class:'big ok',style:'margin-top:12px',onclick:aplicarCorrecao},'💾  Guardar correção'));
+}
+function aplicarCorrecao(){
+  const c=state.corr; const j=c && state.jobs.find(x=>x.id===c.id);
+  if(!j || j.status==='done'){ state.corr=null; state.view='board'; return render(); }
+  const series=seriesDaCorrecao();
+  if(!c.operacao){ toast('Escolhe a operação deste artigo','err'); return; }
+  if(!series.length){ toast('Escolhe ou escreve pelo menos uma série','err'); return; }
+  const antes={ artigo:j.artigo, operacao:j.operacao, series:(j.series||[]).slice() };
+  const igual = c.artigo===antes.artigo && c.operacao===antes.operacao && series.slice().sort().join(',')===antes.series.slice().sort().join(',');
+  if(igual){ toast('Não mudaste nada','err'); return; }
+  // o mesmo bloqueio de quem começa um trabalho: caixa embalada/entregue não leva esta operação
+  const fechadas=series.filter(s=>!antes.series.includes(s)).map(s=>({s:s, est:estadoDaSerie(s)})).filter(x=>serieFechadaPara(x.est, c.operacao));
+  if(fechadas.length && !confirm('Atenção:\n\n'+fechadas.map(x=>'   '+x.s+' — '+x.est).join('\n')+'\n\nEstas caixas já estão fechadas para esta operação. Corrigir mesmo assim?')) return;
+  const sig=c.operacao+'|'+series.slice().sort().join(',');
+  const outro=state.jobs.find(x=>x!==j && x.status!=='done' && (x.operacao+'|'+(x.series||[]).slice().sort().join(','))===sig);
+  if(outro){ alert('Já há outro trabalho aberto com esta operação e estas séries ('+outro.artigo+').\n\nFecha um dos dois antes de corrigir.'); return; }
+  if(!confirm('Corrigir o trabalho?\n\nDE:    '+antes.artigo+'\n          '+antes.series.join(' · ')+'\n\nPARA:  '+c.artigo+'\n          '+series.join(' · ')+(c.operacao!==antes.operacao?('\n          operação: '+c.operacao):'')+'\n\nA equipa e as horas ficam como estão.')) return;
+  j.artigo=c.artigo; j.operacao=c.operacao;
+  j.programa=progDoArtigo(c.artigo)||j.programa;
+  j.plano=(planoDoArtigo(c.artigo)||{}).codigo||'';
+  j.unidade=unidadeDaOp(c.operacao,c.artigo)||j.unidade;
+  j.series=series;
+  const nota='[corrigido pelo supervisor: era '+antes.artigo+' · '+antes.series.join(' ')+']';
+  j.comentario=((j.comentario||'').replace(/\s*\[corrigido pelo supervisor:[^\]]*\]/g,'')+' '+nota).trim();
+  (j.correcoes=j.correcoes||[]).push({ ts:nowTs(), de:antes, para:{ artigo:c.artigo, operacao:c.operacao, series:series.slice() } });
+  if(state.cont && state.cont.artigo===antes.artigo) state.cont=null;     // a "operação seguinte" guiada era do artigo errado
+  state.corr=null; save(); pushTrabAberto(j,'aberto');
+  state.view='board'; toast('Trabalho corrigido: '+c.artigo,'ok');
+}
+
 /* ---- PIN ---- */
 function renderPin(w){
   w.append(backbar('board','Identifica-te'));
@@ -589,6 +712,8 @@ function tryLogin(){
     if(String(state.pinbuf)===PIN_SUPERVISOR){ state.pinbuf=''; state.intent=null; state.view='fecharAntigos'; render(); return; }
     toast('Só o supervisor pode fechar trabalhos.','err'); state.pinbuf=''; render(); return;
   }
+  // 07-10-2026 — tocar num trabalho e pôr o PIN de supervisor abre a correção do artigo/série
+  if(state.intent==='jobaction' && String(state.pinbuf)===PIN_SUPERVISOR){ state.pinbuf=''; state.intent=null; abrirCorrigir(state.jobActionId); return; }
   const op=state.cfg.operadores.find(o=>String(o.pin)===String(state.pinbuf));
   if(!op){ toast('PIN não reconhecido','err'); state.pinbuf=''; render(); return; }
   state.pendingOp=op; state.view='confirma'; render();
