@@ -1037,6 +1037,72 @@ function confirmStock(){ const s=state.smov;
   state._sopen=s.artigo; state.smov=null; state.view='stockmap'; render();
 }
 
+/* ---- CAIXAS EM CURSO na lista das séries ----
+   08-10-2026 — a Sónia: "o difícil é garantir que não escolhem um número errado, sabendo que o
+   produto passa por vários estágios até estar entregue" (grandes segmentos: soldadura, montagem,
+   embalamento; fracs: só montagem) — "podemos colocar «caixas em curso»".
+   A lista das séries era uma coluna de números todos iguais. Agora as caixas em que já houve
+   trabalho vêm primeiro, num grupo "Caixas em curso", cada uma com a sua história: que operações
+   já teve, em que dia e por quem — e se está alguém nela agora. Quem vai continuar a montagem de
+   ontem vê a caixa de ontem no topo, com o nome de quem lá esteve.
+   A história vem da tabela dos Trabalhos Abertos (um trabalho = artigo + operação + séries +
+   operadores), que o quiosque já lê de 3 em 3 minutos, mais os trabalhos deste aparelho. Não diz
+   se a operação ficou CONCLUÍDA (os trabalhos fecham sozinhos ao fim do dia), só que houve trabalho. */
+function _trabDiaISO(v){
+  const s=String(v==null?'':v).trim();
+  if(/^\d{5}(\.\d+)?$/.test(s)) return new Date(Date.UTC(1899,11,30)+parseFloat(s)*86400000).toISOString().slice(0,10);
+  let m=s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) return m[1]+'-'+m[2]+'-'+m[3];
+  m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(m) return m[3]+'-'+two(+m[2])+'-'+two(+m[1]);
+  return '';
+}
+function guardarHistoricoTrab(rows){
+  try{
+    const fech={}, ult={};
+    (rows||[]).forEach(x=>{ const id=String(x.ID||''); if(!id) return; if(/^fechad|^fechar/i.test(String(x.Estado||''))) fech[id]=true; ult[id]=x; });
+    const hoje=dstr(nowTs()); const h={};
+    Object.keys(ult).forEach(id=>{ const x=ult[id];
+      if(/carga e transporte/i.test(String(x.Operacao||''))) return;
+      const dia=_trabDiaISO(x.Data); const art=String(x.Artigo||'').trim().toLowerCase(); if(!art) return;
+      String(x.Series||'').split('·').map(s=>s.trim().toUpperCase()).filter(s=>s && s!=='STOCK').forEach(se=>{
+        const k=art+'|'+se; const o=String(x.Operacao||''); if(!h[k]) h[k]={};
+        const a=h[k][o];
+        if(!a || dia>=a.dia) h[k][o]={ dia:dia, quem:String(x.Operadores||''), aberto:(!fech[id] && dia===hoje) || (a?a.aberto&&a.dia===dia:false) };
+      });
+    });
+    state._hist=h; state._histQuando=nowTs();
+  }catch(e){}
+}
+function historicoDaSerie(artigo, serie){
+  const k=String(artigo||'').trim().toLowerCase()+'|'+String(serie||'').trim().toUpperCase();
+  const base=(state._hist&&state._hist[k])||{}; const ops={}; Object.keys(base).forEach(o=>{ ops[o]=Object.assign({},base[o]); });
+  // os trabalhos deste aparelho, que ainda podem não ter chegado à nuvem
+  (state.jobs||[]).forEach(j=>{ if(j.transp) return;
+    if(String(j.artigo||'').trim().toLowerCase()!==String(artigo||'').trim().toLowerCase()) return;
+    if(!(j.series||[]).some(s=>String(s).toUpperCase()===String(serie||'').trim().toUpperCase())) return;
+    const dia=j.dia||''; const a=ops[j.operacao];
+    if(!a || dia>=a.dia) ops[j.operacao]={ dia:dia, quem:[...new Set((j.workers||[]).map(w=>w.opCurto).filter(Boolean))].join(', '), aberto:j.status!=='done' };
+  });
+  return Object.keys(ops).map(o=>Object.assign({op:o},ops[o])).sort((a,b)=>(a.dia||'').localeCompare(b.dia||''));
+}
+function agruparEmCurso(artigo, lista){
+  const emCurso=[], resto=[];
+  lista.forEach(e=>{ const hst=historicoDaSerie(artigo,e.serie); if(hst.length){ e._ult=hst[hst.length-1].dia||''; e._agora=hst.some(x=>x.aberto)?1:0; emCurso.push(e); } else resto.push(e); });
+  emCurso.sort((a,b)=>(b._agora-a._agora)||(b._ult||'').localeCompare(a._ult||''));
+  return { emCurso:emCurso, resto:resto };
+}
+function historicoEl(artigo, serie, operacaoAtual){
+  const hst=historicoDaSerie(artigo,serie); if(!hst.length) return null;
+  const dm=s=>s?(s.slice(8,10)+'/'+s.slice(5,7)):'?';
+  const sem=o=>String(o||'').replace(/^[^-]*-\s*/,'');
+  const n=s=>String(s||'').trim().toLowerCase();
+  const box=el('small',{style:'display:block;margin-top:3px;color:var(--soft);white-space:normal;line-height:1.35'});
+  hst.slice(-4).forEach((x,i)=>{
+    const esta=n(x.op)===n(operacaoAtual);
+    if(i) box.append(' · ');
+    box.append(el('span',{style:esta?'color:var(--cy);font-weight:700':''}, (x.aberto?'▶ ':'')+sem(x.op)+' '+dm(x.dia)+(x.quem?' ('+x.quem+')':'')+(x.aberto?' — agora':'')));
+  });
+  return box;
+}
 /* ---- SÉRIES / MODO ---- */
 function renderSeries(w){
   const d=state.draft; if(!d.sel)d.sel=[];
@@ -1047,21 +1113,44 @@ function renderSeries(w){
   ['Encomenda','Stock'].forEach(m=>seg.append(el('button',{class:'segbtn'+(d.modo===m?' on':''),onclick:()=>{d.modo=m;render();}},m)));
   w.append(seg);
   if(d.modo==='Encomenda'){
-    const disp=(state.enc||[]).filter(e=>e.artigo===d.artigo);
-    w.append(el('p',{class:'lbl'}, 'Escolhe as séries — '+d.artigo+'  ('+disp.length+' pendentes)'));
-    if(!disp.length){ w.append(el('div',{class:'flag'},'Sem séries pendentes deste artigo. Usa Stock, ou confirma o planeamento das encomendas.')); }
+    // 08-10-2026 — a Sónia: "os embalamentos só podem referir-se a caixas entregues". O embalamento
+    // faz-se no cliente, com a caixa já entregue; na lista de um embalamento só entram as caixas
+    // que as Encomendas dão como ENTREGUES. (O "Embalamento final" e a tampa dos KC são 2º ciclo e
+    // ficam como estavam.) Se a caixa não aparecer, há o "➕ A série certa não está na lista".
+    const todasDoArtigo=(state.enc||[]).filter(e=>e.artigo===d.artigo);
+    const soEmb = /embalamento/i.test(d.operacao||'') && !/tampa|embalamento final/i.test(d.operacao||'');
+    const disp = soEmb ? todasDoArtigo.filter(e=>String(e.estado||'').trim().toLowerCase()==='entregue') : todasDoArtigo;
+    w.append(el('p',{class:'lbl'}, 'Escolhe as séries — '+d.artigo+'  ('+disp.length+(soEmb?' entregues)':' pendentes)')));
+    if(soEmb){ const nFora=todasDoArtigo.length-disp.length;
+      w.append(el('div',{class:'flag'},'📦 O embalamento só se regista em caixas ENTREGUES.'+(nFora?(' '+nFora+' caixa(s) deste artigo ainda não constam como entregues e não aparecem.'):'')+' Se a caixa que tens à frente não está na lista, usa "➕ A série certa não está na lista".')); }
+    if(!disp.length){ w.append(el('div',{class:'flag'}, soEmb ? 'Nenhuma caixa deste artigo consta como ENTREGUE nas encomendas.' : 'Sem séries pendentes deste artigo. Usa Stock, ou confirma o planeamento das encomendas.')); }
     else {
       w.append(el('input',{class:'search',placeholder:'Filtrar série…',oninput:(e)=>{state._sf=e.target.value;render();}}));
       const sf=(state._sf||'').toUpperCase();
       const list=el('div',{class:'list',style:'max-height:44vh;overflow:auto'});
-      disp.filter(e=>e.serie.toUpperCase().includes(sf)).slice(0,300).forEach(e=>{
+      const _g=agruparEmCurso(d.artigo, disp.filter(e=>e.serie.toUpperCase().includes(sf)));
+      const _grp=t=>el('div',{style:'font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--cy);padding:9px 4px 5px'},t);
+      _g.emCurso.concat(_g.resto).slice(0,300).forEach((e,_i)=>{
+        if(_g.emCurso.length && _i===0) list.append(_grp('🔧 Caixas em curso ('+_g.emCurso.length+')'));
+        if(_g.emCurso.length && _i===_g.emCurso.length) list.append(_grp('Outras caixas — ainda sem trabalho registado ('+_g.resto.length+')'));
         const on=d.sel.includes(e.serie);
         list.append(el('button',{class:'item',style:on?'border-color:var(--cy);background:#0f2831':'',
           onclick:()=>{ d.sel = on ? d.sel.filter(x=>x!==e.serie) : [...d.sel,e.serie]; render(); }},
           el('span',{class:'pfx',style:on?'color:var(--cy)':'color:var(--faint)'}, on?'✓':'○'),
-          el('span',{class:'t'}, el('b',{},e.serie), el('small',{}, 'PO '+(e.po||'—')+' · '+e.estado))));
+          el('span',{class:'t'}, el('b',{},e.serie), el('small',{}, 'PO '+(e.po||'—')+' · '+e.estado), historicoEl(d.artigo,e.serie,d.operacao))));
       });
       w.append(list);
+    }
+    // 08-10-2026 — A SÉRIE CERTA NÃO ESTÁ NA LISTA. A lista só tem as encomendas activas; quando a
+    // caixa que têm à frente já consta como terminada, ou a encomenda tem o número errado, os
+    // operadores eram obrigados a escolher outra série só para poderem trabalhar (o embalamento da
+    // EM2235 ficou registado na EM2234, e eles sabiam). Agora escrevem o número que está na caixa:
+    // o registo sai certo e leva uma nota para a supervisora acertar a encomenda.
+    if(!d._fora){ w.append(el('button',{class:'mini',style:'margin-top:10px;display:block',onclick:()=>{ d._fora=true; render(); }},'➕ A série certa não está na lista')); }
+    else {
+      w.append(el('p',{class:'lbl',style:'margin-top:12px'},'A série não está na lista — escreve o número que está na caixa'));
+      w.append(el('input',{class:'search',placeholder:'ex.: 2235',value:(d.fora||''),oninput:(e)=>{d.fora=e.target.value;}}));
+      w.append(el('p',{class:'muted',style:'font-size:12px;margin:4px 0 0'},'O trabalho fica registado com este número e a supervisora é avisada para acertar a encomenda.'));
     }
     w.append(el('div',{class:'chip',style:'margin-top:10px'}, d.sel.length+' série(s) selecionada(s)'));
   } else {
@@ -1086,6 +1175,7 @@ function estadoDaSerie(serie){
 function serieFechadaPara(estado, operacao){
   const segundoCiclo=/tampa|embalamento final/i.test(operacao||'');
   if(segundoCiclo) return false;                    // 2º ciclo dos KC vem mesmo depois de tudo
+  if(/embalamento/i.test(operacao||'') && estado && estado!=='entregue') return true;   // embalamento: só caixas entregues (08-10)
   if(estado==='embalada') return true;              // embalada = terminada
   if(estado==='entregue') return !/embalamento|carga e transporte/i.test(operacao||'');
   return false;
@@ -1093,7 +1183,20 @@ function serieFechadaPara(estado, operacao){
 
 function startJob(){
   const d=state.draft; let series=[];
-  if(d.modo==='Encomenda'){ series=(d.sel||[]).slice(); if(!series.length){ toast('Seleciona pelo menos uma série','err'); return; } }
+  let foraLista=[];
+  if(d.modo==='Encomenda'){ series=(d.sel||[]).slice();
+    // séries escritas à mão por não estarem na lista: com o prefixo das outras séries deste artigo ("2235" -> "EM2235")
+    const exemplo=(state.enc||[]).find(e=>e.artigo===d.artigo && /^[A-Za-z]+\d+$/.test(String(e.serie||'')));
+    const prefixo=exemplo?String(exemplo.serie).match(/^[A-Za-z]+/)[0].toUpperCase():'';
+    foraLista=(d._fora?parseSeries(d.fora):[]).map(s=>(/^\d+$/.test(s)&&prefixo)?prefixo+s:s).filter(s=>!series.includes(s));
+    // escrita à mão mas afinal está na lista deste artigo: entra como escolhida, sem nota
+    const soEmbalamento=/embalamento/i.test(d.operacao||'') && !/tampa|embalamento final/i.test(d.operacao||'');
+    const naLista=new Set((state.enc||[]).filter(e=>e.artigo===d.artigo && !(soEmbalamento && String(e.estado||'').trim().toLowerCase()!=='entregue')).map(e=>String(e.serie||'').toUpperCase()));
+    foraLista.filter(s=>naLista.has(s)).forEach(s=>series.push(s));
+    foraLista=foraLista.filter(s=>!naLista.has(s));
+    if(foraLista.length && !confirm('Série(s) fora da lista:\n\n   '+foraLista.join('\n   ')+'\n\nConfirma que é o número que está na caixa.\nFica registado assim e a supervisora é avisada.')) return;
+    series=series.concat(foraLista);
+    if(!series.length){ toast('Seleciona pelo menos uma série','err'); return; } }
   else {
     series=parseSeries(d.stock);
     // BLOQUEIO, nao aviso. Uma caixa entregue ou embalada nao volta a receber esta operacao
@@ -1103,6 +1206,7 @@ function startJob(){
     if(fechadas.length){
       alert('Não dá para registar esta operação nestas caixas:\n\n'+
             fechadas.map(x=>'   '+x.s+' — '+x.est).join('\n')+'\n\n'+
+            'O EMBALAMENTO só se regista em caixas ENTREGUES.\n'+
             'Depois de ENTREGUE só se regista embalamento ou transporte.\n'+
             'Depois de EMBALADA, mais nada.\n\n'+
             'Confirma o número de série. Se for mesmo retrabalho, tem de ser lançado no Supervisor.');
@@ -1119,6 +1223,7 @@ function startJob(){
   }
   const j={ id:'J'+Date.now(), artigo:d.artigo, programa:d.programa, operacao:d.operacao, unidade:d.unidade,
     modo:d.modo, series, plano:(planoDoArtigo(d.artigo)||{}).codigo||'', dia:dstr(nowTs()), status:'open', workers:[worker] };
+  if(foraLista.length){ j.foraLista=foraLista.slice(); j.comentario='[série fora da lista: '+foraLista.join(' ')+' — confirmar]'; }
   state.jobs.push(j); save(); pushTrabAberto(j,'aberto'); toast('Trabalho iniciado','ok'); state.view='board'; render();
 }
 
@@ -1579,6 +1684,7 @@ async function reconcileTrabAbertos(){
   _recAndar = true;
   try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); const jj=await r.json(); const rows=jj.value||jj.linhas||(Array.isArray(jj)?jj:[]);
     // BASTA UMA linha "fechado" para o trabalho estar fechado — ver a nota lá em cima.
+    guardarHistoricoTrab(rows); if(state.view==='series') render();     // 08-10: a história de cada caixa, para a lista das séries
     const fechados={}; rows.forEach(x=>{ if(!x.ID) return; const e=String(x.Estado||''); if(e==='fechado'||e==='fechar') fechados[String(x.ID)]=true; });
     let mudou=false;
     (state.jobs||[]).forEach(j=>{ if(j.status==='done') return; const id=deviceName()+'|'+j.id;
