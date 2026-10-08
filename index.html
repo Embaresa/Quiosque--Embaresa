@@ -1154,8 +1154,10 @@ function renderSeries(w){
     }
     w.append(el('div',{class:'chip',style:'margin-top:10px'}, resumoSel(d.sel)));
   } else {
-    w.append(el('p',{class:'lbl'},'Stock — nº de série (deixa em branco para gerar automaticamente)'));
-    w.append(el('input',{class:'search',placeholder:'(automático)',value:(d.stock||''),oninput:(e)=>{d.stock=e.target.value;}}));
+    const _temEnc=(state.enc||[]).some(e=>e.artigo===d.artigo);
+    w.append(el('p',{class:'lbl'}, _temEnc ? 'Stock — escreve o nº de série que está na caixa (obrigatório)' : 'Stock — nº de série (deixa em branco para gerar automaticamente)'));
+    if(_temEnc) w.append(el('div',{class:'flag'},'Esta caixa tem encomendas: é obrigatório indicar a série. Se a souberes escolher na lista, usa \"Encomenda\".'));
+    w.append(el('input',{class:'search',placeholder:(_temEnc?'ex.: EM2238':'(automático)'),value:(d.stock||''),oninput:(e)=>{d.stock=e.target.value;}}));
   }
   w.append(el('div',{class:'cta',style:'position:static;padding:16px 0 0'},
     el('button',{class:'big', onclick:startJob},'▶  Começar')));
@@ -1223,7 +1225,18 @@ function startJob(){
             'Confirma o número de série. Se for mesmo retrabalho, tem de ser lançado no Supervisor.');
       return;
     }
-    if(!series.length) series=['STOCK-'+Date.now().toString().slice(-6)];
+    if(!series.length){
+      // 08-10-2026 — SEM NÚMERO AUTOMÁTICO PARA CAIXAS COM ENCOMENDA. Os soldadores entravam em
+      // "Stock", deixavam a série em branco e o quiosque inventava "STOCK-570624": a soldadura
+      // ficava registada, mas em caixa nenhuma (a EM2238 "não tinha soldadura"). A Sónia: "creio
+      // que é hábito, mas vamos obrigá-los a escolher". Se o artigo tem encomendas, é obrigatório
+      // indicar a série; o número automático fica só para o que não tem encomendas (logística).
+      if((state.enc||[]).some(e=>e.artigo===d.artigo)){
+        alert('Falta o número de série.\n\nEsta caixa tem encomendas. Tens de indicar em que caixa estás a trabalhar:\n\n   • toca em "Encomenda" e escolhe a série na lista, ou\n   • escreve aqui o número que está na caixa.');
+        return;
+      }
+      series=['STOCK-'+Date.now().toString().slice(-6)];
+    }
   }
   { const cx=series.reduce((t,x)=>t+caixasDaSerie(x),0);
     if(cx>series.length && series.length>1 && !confirm('Escolheste '+series.length+' CONJUNTOS = '+cx+' CAIXAS.\n\n'+series.map(x=>'   '+x+'   ('+caixasDaSerie(x)+' caixas)').join('\n')+'\n\nCada linha é um conjunto, não uma caixa só.\nSe vais fazer só um conjunto, cancela e escolhe só uma linha.\n\nÉ mesmo isto que vais fazer agora?')) return; }
