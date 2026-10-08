@@ -1137,7 +1137,7 @@ function renderSeries(w){
         list.append(el('button',{class:'item',style:on?'border-color:var(--cy);background:#0f2831':'',
           onclick:()=>{ d.sel = on ? d.sel.filter(x=>x!==e.serie) : [...d.sel,e.serie]; render(); }},
           el('span',{class:'pfx',style:on?'color:var(--cy)':'color:var(--faint)'}, on?'✓':'○'),
-          el('span',{class:'t'}, el('b',{},e.serie), el('small',{}, 'PO '+(e.po||'—')+' · '+e.estado), historicoEl(d.artigo,e.serie,d.operacao))));
+          el('span',{class:'t'}, el('b',{},e.serie), el('small',{}, 'PO '+(e.po||'—')+' · '+e.estado+(caixasDaSerie(e.serie)>1?(' · CONJUNTO DE '+caixasDaSerie(e.serie)+' CAIXAS'):'')), historicoEl(d.artigo,e.serie,d.operacao))));
       });
       w.append(list);
     }
@@ -1152,13 +1152,24 @@ function renderSeries(w){
       w.append(el('input',{class:'search',placeholder:'ex.: 2235',value:(d.fora||''),oninput:(e)=>{d.fora=e.target.value;}}));
       w.append(el('p',{class:'muted',style:'font-size:12px;margin:4px 0 0'},'O trabalho fica registado com este número e a supervisora é avisada para acertar a encomenda.'));
     }
-    w.append(el('div',{class:'chip',style:'margin-top:10px'}, d.sel.length+' série(s) selecionada(s)'));
+    w.append(el('div',{class:'chip',style:'margin-top:10px'}, resumoSel(d.sel)));
   } else {
     w.append(el('p',{class:'lbl'},'Stock — nº de série (deixa em branco para gerar automaticamente)'));
     w.append(el('input',{class:'search',placeholder:'(automático)',value:(d.stock||''),oninput:(e)=>{d.stock=e.target.value;}}));
   }
   w.append(el('div',{class:'cta',style:'position:static;padding:16px 0 0'},
     el('button',{class:'big', onclick:startJob},'▶  Começar')));
+}
+// 08-10-2026 — CONJUNTOS. Nas caixas que vêm em conjunto a série traz o número de caixas à frente:
+// "6*SPOILERS69" são 6 caixas, "2*AILLERONS89" são 2. A Sónia: "ele faz 6 mas regista mais, porque
+// não percebe que cada conjunto não é só uma" — fazia um conjunto (6 caixas) e escolhia 6 linhas.
+// A lista passa a dizê-lo em cada linha, o total mostra conjuntos E caixas, e ao começar com mais
+// de um conjunto pede-se confirmação com a conta feita.
+function caixasDaSerie(s){ const m=String(s||'').match(/^\s*(\d+)\s*\*/); return m?(parseInt(m[1])||1):1; }
+function resumoSel(sel){
+  const cx=(sel||[]).reduce((t,x)=>t+caixasDaSerie(x),0);
+  if(cx>(sel||[]).length) return sel.length+' conjunto(s) selecionado(s) = '+cx+' caixas';
+  return (sel||[]).length+' série(s) selecionada(s)';
 }
 function parseSeries(s){ return (s||'').split(/[\s,;\n]+/).map(x=>x.trim().toUpperCase()).filter(Boolean); }
 
@@ -1214,6 +1225,8 @@ function startJob(){
     }
     if(!series.length) series=['STOCK-'+Date.now().toString().slice(-6)];
   }
+  { const cx=series.reduce((t,x)=>t+caixasDaSerie(x),0);
+    if(cx>series.length && series.length>1 && !confirm('Escolheste '+series.length+' CONJUNTOS = '+cx+' CAIXAS.\n\n'+series.map(x=>'   '+x+'   ('+caixasDaSerie(x)+' caixas)').join('\n')+'\n\nCada linha é um conjunto, não uma caixa só.\nSe vais fazer só um conjunto, cancela e escolhe só uma linha.\n\nÉ mesmo isto que vais fazer agora?')) return; }
   const sig=d.operacao+'|'+series.slice().sort().join(',');
   const existing=state.jobs.find(j=>j.status!=='done' && (j.operacao+'|'+(j.series||[]).slice().sort().join(','))===sig);
   const worker={ op:state.op.nome, opCurto:curto(state.op.nome), pin:state.op.pin, startTs:nowTs(), pauses:[], status:'running', endTs:null };
