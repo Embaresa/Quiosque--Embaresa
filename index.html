@@ -1404,6 +1404,11 @@ function enqueueRegisto(j,wk,concluida){
   // A caixa é concluída/produzida por TI na Gestão de Encomendas (ao pôr em stock).
   const caixaConcl = 'Nao';
   const series = (j.series && j.series.length) ? j.series : [''];
+  // 08-10-2026 — a Sónia: "todos os registos com 0 min são para apagar". Um trabalho começado por
+  // engano e fechado logo a seguir (o que daria 0 min por série) não chega a
+  // ser registo: só fazia lixo no Excel e punha caixas "em curso" sem ninguém lhes ter tocado.
+  // Fica marcado como tratado para a rede de segurança não o repor.
+  if(!j.transp && Math.round(wActive(wk)/series.length/60000) === 0){ try{ wk._reg = true; }catch(e){} return; }
   const durMs = Math.round(wActive(wk)/series.length);      // tempo repartido pelas séries do lote
   const pauMs = Math.round(wPaused(wk)/series.length);
   const dh = new Date().toLocaleString('pt-PT');
