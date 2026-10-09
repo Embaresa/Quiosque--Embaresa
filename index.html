@@ -1069,6 +1069,10 @@ function guardarHistoricoTrab(rows){
         if(!a || dia>=a.dia) h[k][o]={ dia:dia, quem:String(x.Operadores||''), aberto:(!fech[id] && dia===hoje) || (a?a.aberto&&a.dia===dia:false) };
       });
     });
+    // trabalhos de hoje ainda abertos, com os PINs de quem lá está — para o aviso de "um trabalho de cada vez"
+    const ab=[]; Object.keys(ult).forEach(id=>{ const x=ult[id]; if(fech[id] || _trabDiaISO(x.Data)!==hoje) return;
+      ab.push({ disp:String(x.Dispositivo||''), artigo:String(x.Artigo||''), op:String(x.Operacao||''), series:String(x.Series||''), pins:pinsDaLinha(x.Pins) }); });
+    state._abertosNuvem=ab;
     state._hist=h; state._histQuando=nowTs();
   }catch(e){}
 }
@@ -1194,6 +1198,43 @@ function serieFechadaPara(estado, operacao){
   return false;
 }
 
+/* ---- UM OPERADOR, UM TRABALHO DE CADA VEZ ----
+   09-10-2026 — a 08/10 três operadores tinham o embalamento da EM2420 aberto até às 19:05 e às
+   18:25 já estavam a montar outra caixa: 40 minutos a contar duas vezes, cada um. A Sónia disse
+   "sim" a avisar no momento. Ao começar (ou entrar em) um trabalho:
+     1. se o operador tem outro trabalho A CORRER neste aparelho → pergunta; com OK fecha-se a
+        parte dele nesse trabalho agora (fica registada até este minuto) e começa o novo;
+     2. se consta num trabalho aberto NOUTRO aparelho (tabela dos Trabalhos Abertos) → avisa.
+        Aí não dá para fechar daqui, e a tabela não diz se ele ainda lá está ou se já concluiu a
+        parte dele — por isso é só aviso, e pode seguir.
+   Não se aplica a quem está em pausa noutro trabalho (não está a contar tempo), nem aos
+   motoristas: fazem os transportes com o trabalho de logística aberto, e é assim mesmo. */
+function podeComecarOutro(op, ignorar){
+  try{
+    if(!op) return true;
+    if(/transp/i.test(String(op.seccao||'')+' '+String(op.unidade||''))) return true;
+    const pin=String(op.pin||''); if(!pin) return true;
+    const fora=a=>/^(logistica|transporte)$/i.test(String(a||'').trim());
+    const meus=[];
+    (state.jobs||[]).forEach(j=>{ if(j===ignorar || j.status==='done' || j.transp || fora(j.artigo)) return;
+      (j.workers||[]).forEach(w=>{ if(String(w.pin)===pin && !w.endTs && w.status!=='paused') meus.push({j:j,w:w}); }); });
+    if(meus.length){
+      const txt=meus.map(x=>'   '+x.j.artigo+' · '+x.j.operacao+'\n   '+((x.j.series||[]).join(' ')||'sem série')+' — desde as '+hhmm(x.w.startTs)).join('\n\n');
+      if(!confirm('Ainda tens um trabalho a correr:\n\n'+txt+'\n\nNão dá para estar em dois ao mesmo tempo — o tempo contava a dobrar.\n\nOK = fechar AGORA a tua parte nesse trabalho e começar o novo.\nCancelar = voltar atrás.')) return false;
+      meus.forEach(x=>{ x.w.endTs=nowTs(); x.w.status='parado'; enqueueRegisto(x.j,x.w,false);
+        if(!(x.j.workers||[]).some(w=>!w.endTs)){ x.j.status='done'; pushTrabAberto(x.j,'fechado'); } else pushTrabAberto(x.j,'aberto'); });
+      save();
+      return true;
+    }
+    const eu=deviceName();
+    const la=(state._abertosNuvem||[]).filter(t=>t.disp!==eu && t.pins.indexOf(pin)>=0 && !fora(t.artigo));
+    if(la.length){
+      const txt=la.map(t=>'   '+t.artigo+' · '+t.op+'\n   '+(t.series||'sem série')+' — no aparelho '+t.disp).join('\n\n');
+      return confirm('Consta um trabalho aberto com o teu nome NOUTRO aparelho:\n\n'+txt+'\n\nSe ainda estás nele, fecha-o lá primeiro — senão o tempo conta a dobrar.\nSe já concluíste a tua parte lá, podes seguir.\n\nOK = começar este na mesma.   Cancelar = voltar atrás.');
+    }
+  }catch(e){}
+  return true;
+}
 function startJob(){
   const d=state.draft; let series=[];
   let foraLista=[];
@@ -1242,6 +1283,7 @@ function startJob(){
     if(cx>series.length && series.length>1 && !confirm('Escolheste '+series.length+' CONJUNTOS = '+cx+' CAIXAS.\n\n'+series.map(x=>'   '+x+'   ('+caixasDaSerie(x)+' caixas)').join('\n')+'\n\nCada linha é um conjunto, não uma caixa só.\nSe vais fazer só um conjunto, cancela e escolhe só uma linha.\n\nÉ mesmo isto que vais fazer agora?')) return; }
   const sig=d.operacao+'|'+series.slice().sort().join(',');
   const existing=state.jobs.find(j=>j.status!=='done' && (j.operacao+'|'+(j.series||[]).slice().sort().join(','))===sig);
+  if(!podeComecarOutro(state.op, existing)) return;
   const worker={ op:state.op.nome, opCurto:curto(state.op.nome), pin:state.op.pin, startTs:nowTs(), pauses:[], status:'running', endTs:null };
   if(existing){
     if(existing.workers.some(x=>x.pin===state.op.pin && !x.endTs)){ toast('Já estás neste trabalho','err'); state.view='board'; render(); return; }
@@ -1328,6 +1370,7 @@ function finishJob(j){
 function startContinuar(o){ const c=state.cont;
   const opObj = state.op ? {nome:state.op.nome,pin:state.op.pin} : (c.op||null);
   if(!opObj||!opObj.nome){ toast('Identifica-te para continuar','err'); return; }
+  if(!podeComecarOutro({ pin:opObj.pin, nome:opObj.nome, seccao:(state.op&&state.op.seccao)||'', unidade:(state.op&&state.op.unidade)||'' }, null)) return;
   const worker={ op:opObj.nome, opCurto:curto(opObj.nome), pin:opObj.pin||'', startTs:nowTs(), pauses:[], status:'running', endTs:null };
   const j={ id:'J'+Date.now(), artigo:c.artigo, programa:c.programa, operacao:o.operacao, unidade:o.unidade, modo:c.modo,
     series:c.series.slice(), plano:(planoDoArtigo(c.artigo)||{}).codigo||'', dia:dstr(nowTs()), status:'open', workers:[worker] };
