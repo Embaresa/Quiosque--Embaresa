@@ -728,7 +728,7 @@ function confirmOp(){
   else if(state.intent==='jobaction'){ state.curJob=state.jobActionId; state.jobPhase='menu'; state.view='job'; }
   else if(state.intent==='contagem'){
     if(!/transp/i.test((op.seccao||'')+' '+(op.unidade||''))){ toast('A contagem de materiais é feita pelos motoristas (Transportes).','err'); state.op=null; state.view='board'; render(); return; }
-    state.cont=null; state.view='contagem'; render(); loadContSrv().then(()=>{ if(state.view==='contagem') render(); }); return; }
+    state.cont=null; state.contFam=null; state.view='contagem'; render(); loadContSrv().then(()=>{ if(state.view==='contagem') render(); }); return; }
   else if(state.intent==='stock'){
     if(!/transp/i.test((op.seccao||'')+' '+(op.unidade||''))){ toast('Só os motoristas (Transportes) têm acesso ao stock.','err'); state.op=null; state.view='board'; render(); return; }
     state.smov=null; state._sopen=null; state._af=''; state.view='stockmap'; render(); loadStockMap().then(()=>{ if((state.view||'').indexOf('stock')===0) render(); }); return; }
@@ -959,24 +959,37 @@ function contDia(v){ const s=String(v||'').trim(); if(/^\d{5}(\.\d+)?$/.test(s))
 function ultimasContagens(){ let srv=[]; try{ srv=JSON.parse(localStorage.getItem(LS.contsrv)||'[]'); }catch(e){}
   const u={}; srv.concat(loadContQ()).forEach(r=>{ const ref=String(r.Ref||'').trim(); if(!ref) return; u[ref]={contado:String(r.Contado||''),emb:String(r.Embalagem||''),data:contDia(r.Data),quem:String(r.Motorista||'')}; }); return u; }
 function renderContagem(w){
-  w.append(backbar('board','Contagem de materiais — '+curto(state.op.nome)));
-  const mats=(state.cfg.materiaisContagem||[]);
-  if(!mats.length){ w.append(el('div',{class:'empty'},'A lista de materiais ainda não chegou a este aparelho. Tenta daqui a pouco.')); return; }
-  const C=state.cont=(state.cont||{v:{},e:{}}); const ult=ultimasContagens(); const hoje=dstr(nowTs());
-  const nHoje=mats.filter(m=>ult[m.ref]&&ult[m.ref].data===hoje).length;
-  w.append(el('p',{class:'lbl'},'Escreve quanto há de cada material. Deixa em branco o que não contaste (se não há nenhum, escreve 0). Hoje já contados: '+nHoje+' de '+mats.length+'.'));
-  const btn=el('button',{class:'big ok',onclick:()=>confirmContagem()},'');
-  const atualizaBtn=()=>{ const n=Object.keys(C.v).length; btn.textContent='✅  Guardar contagem'+(n?' — '+n+(n>1?' materiais':' material'):''); };
+  const mats=(state.cfg.materiaisContagem||[]); const C=state.cont=(state.cont||{v:{},e:{}}); const ult=ultimasContagens(); const hoje=dstr(nowTs());
   const fams=[]; mats.forEach(m=>{ const f=m.fam||'Outros'; if(fams.indexOf(f)<0) fams.push(f); });
-  fams.forEach(f=>{ w.append(el('p',{class:'lbl',style:'margin:18px 0 4px;font-weight:800;font-size:15px'},f));
-    mats.filter(m=>(m.fam||'Outros')===f).forEach(m=>{ const u=ult[m.ref]; const embs=(m.emb&&m.emb.length)?m.emb:[[m.uni||'un',1]]; const feito=u&&u.data===hoje;
-      const inp=el('input',{type:'text',inputmode:'decimal',placeholder:'—',style:'width:96px;font-size:22px;padding:10px;text-align:right;border-radius:10px;border:2px solid #94a3b8'}); inp.value=(C.v[m.ref]!=null?C.v[m.ref]:'');
-      inp.addEventListener('input',()=>{ if(inp.value.trim()==='') delete C.v[m.ref]; else C.v[m.ref]=inp.value; atualizaBtn(); });
-      const sel=el('select',{style:'font-size:16px;padding:11px 6px;border-radius:10px;border:2px solid #94a3b8;max-width:150px'}); embs.forEach((e,i)=>{ const o=el('option',{value:String(i)},e[0]); sel.append(o); }); sel.value=String(C.e[m.ref]||0);
-      sel.addEventListener('change',()=>{ C.e[m.ref]=parseInt(sel.value)||0; });
-      w.append(el('div',{style:'display:flex;gap:10px;align-items:center;padding:10px 2px;border-bottom:1px solid rgba(148,163,184,.35)'},
-        el('div',{style:'flex:1;min-width:0'},el('div',{style:'font-weight:700'},(feito?'✅ ':'')+m.nome),el('div',{style:'font-size:12px;opacity:.75'},u?('última: '+u.contado+' '+u.emb+' · '+u.data.slice(8,10)+'/'+u.data.slice(5,7)+(u.quem?' · '+curto(u.quem):'')):'ainda sem contagem')),
-        inp, sel)); }); });
+  const famSel=(state.contFam&&fams.indexOf(state.contFam)>=0)?state.contFam:null;
+  if(!famSel){
+    // 1.º ecrã: um quadrado por família (ela: "quero caixas, porque parafusos vai ser contagem diária, as outras podem não ser")
+    w.append(backbar('board','Contagem de materiais — '+curto(state.op.nome)));
+    if(!mats.length){ w.append(el('div',{class:'empty'},'A lista de materiais ainda não chegou a este aparelho. Tenta daqui a pouco.')); return; }
+    w.append(el('p',{class:'lbl'},'Escolhe o que vais contar.'));
+    const grade=el('div',{style:'display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px'});
+    fams.forEach(f=>{ const lst=mats.filter(m=>(m.fam||'Outros')===f); const nH=lst.filter(m=>ult[m.ref]&&ult[m.ref].data===hoje).length;
+      const datas=lst.map(m=>ult[m.ref]?ult[m.ref].data:'').filter(Boolean).sort(); const ud=datas.length?datas[datas.length-1]:'';
+      const estado=nH===lst.length?'✅ contado hoje':(nH?('hoje: '+nH+' de '+lst.length):(ud?('última contagem: '+ud.slice(8,10)+'/'+ud.slice(5,7)):'ainda sem contagem'));
+      const b=el('button',{class:'big ghost',style:'height:auto;min-height:118px;padding:14px;text-align:left;display:block;white-space:normal;line-height:1.3'+(nH===lst.length?';opacity:.7':''),onclick:()=>{ state.contFam=f; render(); }});
+      b.append(el('div',{style:'font-size:19px;font-weight:800'},f), el('div',{style:'font-size:14px;margin-top:6px;opacity:.85'},lst.length+(lst.length>1?' materiais':' material')), el('div',{style:'font-size:13px;margin-top:4px;opacity:.85'},estado));
+      grade.append(b); });
+    w.append(grade); return;
+  }
+  // 2.º ecrã: só os materiais da família escolhida
+  w.append(el('div',{class:'backbar'}, el('button',{class:'ghost',onclick:()=>{ state.contFam=null; render(); }},'‹ Famílias'), el('b',{style:'margin-left:10px'},famSel)));
+  w.append(el('p',{class:'lbl'},'Escreve quanto há de cada material. Deixa em branco o que não contaste (se não há nenhum, escreve 0).'));
+  const lista=mats.filter(m=>(m.fam||'Outros')===famSel);
+  const btn=el('button',{class:'big ok',onclick:()=>confirmContagem()},'');
+  const atualizaBtn=()=>{ const n=lista.filter(m=>C.v[m.ref]!=null).length; btn.textContent='✅  Guardar contagem'+(n?' — '+n+(n>1?' materiais':' material'):''); };
+  lista.forEach(m=>{ const u=ult[m.ref]; const embs=(m.emb&&m.emb.length)?m.emb:[[m.uni||'un',1]]; const feito=u&&u.data===hoje;
+    const inp=el('input',{type:'text',inputmode:'decimal',placeholder:'—',style:'width:96px;font-size:22px;padding:10px;text-align:right;border-radius:10px;border:2px solid #94a3b8'}); inp.value=(C.v[m.ref]!=null?C.v[m.ref]:'');
+    inp.addEventListener('input',()=>{ if(inp.value.trim()==='') delete C.v[m.ref]; else C.v[m.ref]=inp.value; atualizaBtn(); });
+    const sel=el('select',{style:'font-size:16px;padding:11px 6px;border-radius:10px;border:2px solid #94a3b8;max-width:150px'}); embs.forEach((e,i)=>{ const o=el('option',{value:String(i)},e[0]); sel.append(o); }); sel.value=String(C.e[m.ref]||0);
+    sel.addEventListener('change',()=>{ C.e[m.ref]=parseInt(sel.value)||0; });
+    w.append(el('div',{style:'display:flex;gap:10px;align-items:center;padding:10px 2px;border-bottom:1px solid rgba(148,163,184,.35)'},
+      el('div',{style:'flex:1;min-width:0'},el('div',{style:'font-weight:700'},(feito?'✅ ':'')+m.nome),el('div',{style:'font-size:12px;opacity:.75'},u?('última: '+u.contado+' '+u.emb+' · '+u.data.slice(8,10)+'/'+u.data.slice(5,7)+(u.quem?' · '+curto(u.quem):'')):'ainda sem contagem')),
+      inp, sel)); });
   atualizaBtn(); w.append(el('div',{class:'cta',style:'position:sticky;bottom:0;padding:12px 0'},btn));
 }
 function confirmContagem(){ const C=state.cont||{v:{},e:{}}; const mats=(state.cfg.materiaisContagem||[]); const novos=[]; const dh=new Date().toLocaleString('pt-PT'); const dia=dstr(nowTs()); let mau=null;
@@ -986,7 +999,7 @@ function confirmContagem(){ const C=state.cont||{v:{},e:{}}; const mats=(state.c
   if(mau){ toast('Número inválido em: '+mau,'err'); return; }
   if(!novos.length){ toast('Ainda não escreveste nenhuma contagem','err'); return; }
   saveContQ(loadContQ().concat(novos)); syncContQ(); state.cont=null;
-  toast('Contagem guardada — '+novos.length+(novos.length>1?' materiais':' material'),'ok'); state.view='board'; render(); }
+  toast('Contagem guardada — '+novos.length+(novos.length>1?' materiais':' material'),'ok'); state.contFam=null; state.view='contagem'; render(); }
 
 function renderStockMap(w){
   w.append(backbar('board','Stock — '+curto(state.op.nome)));
