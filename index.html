@@ -448,6 +448,7 @@ function render(){
     else if(state.view==='planos') renderPlanos(w);
     else if(state.view==='stockmap') renderStockMap(w);
     else if(state.view==='stockmov') renderStockMov(w);
+  else if(state.view==='contagem') renderContagem(w);
     else if(state.view==='meustrab') renderMeusTrabalhos(w);
     else if(state.view==='fecharAntigos') renderFecharAntigos(w);
     else if(state.view==='corrigir') renderCorrigir(w);
@@ -539,6 +540,7 @@ function ctaBoard(){
     el('button',{class:'big ghost', onclick:()=>{ state._pf=''; state._pprog=null; state.view='planos'; render(); }}, '📄  Consultar planos'),
     el('button',{class:'big ok', onclick:()=>{ state.intent='transp'; state.op=null; state.pinbuf=''; state._trStockPedido=false; state.view='pin'; render(); }}, '🚚  Transporte para a ANN'),
     el('button',{class:'big ghost', onclick:()=>{ state.intent='stock'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '🚛  Stock (motoristas)'),
+    el('button',{class:'big ghost', onclick:()=>{ state.intent='contagem'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '📋  Contagem de materiais (motoristas)'),
     el('button',{class:'big ghost', onclick:()=>{ state.intent='meustrab'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }}, '📋  Os meus trabalhos abertos'));
   return cta; }
 
@@ -724,6 +726,9 @@ function confirmOp(){
   state.pendingOp=null; state.pinbuf='';
   if(state.intent==='pert'){ state.pertDraft={motivo:null}; state.view='pertmotivo'; }
   else if(state.intent==='jobaction'){ state.curJob=state.jobActionId; state.jobPhase='menu'; state.view='job'; }
+  else if(state.intent==='contagem'){
+    if(!/transp/i.test((op.seccao||'')+' '+(op.unidade||''))){ toast('A contagem de materiais é feita pelos motoristas (Transportes).','err'); state.op=null; state.view='board'; render(); return; }
+    state.cont=null; state.view='contagem'; render(); loadContSrv().then(()=>{ if(state.view==='contagem') render(); }); return; }
   else if(state.intent==='stock'){
     if(!/transp/i.test((op.seccao||'')+' '+(op.unidade||''))){ toast('Só os motoristas (Transportes) têm acesso ao stock.','err'); state.op=null; state.view='board'; render(); return; }
     state.smov=null; state._sopen=null; state._af=''; state.view='stockmap'; render(); loadStockMap().then(()=>{ if((state.view||'').indexOf('stock')===0) render(); }); return; }
@@ -937,6 +942,52 @@ function computeStock(){ let srv=[]; try{ srv=JSON.parse(localStorage.getItem(LS
   rows.forEach(r=>{ const art=(r.Artigo||r.artigo||''); const se=String(r.NumSerie||r.numSerie||'').trim(); const mv=(r.Movimento||r.movimento||''); if(!se)return; last[art+'|'+se]={art,se,mv}; });
   const map={}; Object.keys(last).forEach(k=>{ const x=last[k]; if(/entra/i.test(x.mv)){ (map[x.art]=map[x.art]||[]).push(x.se); } }); return map; }
 function progDoArtigo(a){ const x=(state.cfg.artigos||[]).find(y=>y.artigo===a); return x?(x.programa||''):''; }
+/* ============ #4 CONTAGEM DIÁRIA DE MATERIAIS (motoristas) — 13-10-2026 ============
+   A Sónia: "preciso criar no tablet dos motoristas um sítio onde eles façam contagem de materiais todos os dias e
+   registem, assim temos inventário diário". Entrada pelo quadro → PIN de motorista (Transportes) → lista dos materiais
+   (state.cfg.materiaisContagem, vem do config.json: ref, nome, uni, fam, emb=[[nome da embalagem, quanto tem na unidade
+   do Sage]]). Escrevem quantas caixas/rolos/placas há; o que fica em branco não foi contado (0 é uma contagem).
+   Um registo por material → fila offline q_cont_queue → fluxo urlContagem (tabela TabContagem). Enquanto o URL não
+   existir no config, fica guardado no aparelho e segue sozinho quando existir. A janela Compras lê por urlContagemLer. */
+LS.contq='q_cont_queue'; LS.contsrv='q_cont_srv';
+function loadContQ(){ try{return JSON.parse(localStorage.getItem(LS.contq)||'[]');}catch(e){return[];} }
+function saveContQ(q){ try{localStorage.setItem(LS.contq,JSON.stringify(q));}catch(e){} }
+var _syncingC=false;
+async function syncContQ(){ if(_syncingC)return; const url=(state.cfg&&state.cfg.urlContagem)||null; let q=loadContQ(); if(!q.length||!url)return; _syncingC=true; const enviados={}; try{ for(const reg of q){ if(reg.ID&&jaEnviado(reg.ID)){ enviados[chaveFila(reg)]=1; continue; } let ok=false; try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(reg)});ok=r.ok;}catch(e){ok=false;} if(ok){ marcarEnviado(reg.ID); enviados[chaveFila(reg)]=1; } } } finally { try{ tirarDaFila(loadContQ, saveContQ, enviados); }catch(e){} _syncingC=false; } }
+async function loadContSrv(){ const url=(state.cfg&&state.cfg.urlContagemLer)||null; if(!url)return; try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); if(r.ok){ let rows=await r.json(); if(!Array.isArray(rows))rows=(rows&&rows.value)||[]; localStorage.setItem(LS.contsrv,JSON.stringify(rows.slice(-600))); } }catch(e){} }
+function contDia(v){ const s=String(v||'').trim(); if(/^\d{5}(\.\d+)?$/.test(s)) return dstr((parseFloat(s)-25569)*86400000); return s.slice(0,10); }
+function ultimasContagens(){ let srv=[]; try{ srv=JSON.parse(localStorage.getItem(LS.contsrv)||'[]'); }catch(e){}
+  const u={}; srv.concat(loadContQ()).forEach(r=>{ const ref=String(r.Ref||'').trim(); if(!ref) return; u[ref]={contado:String(r.Contado||''),emb:String(r.Embalagem||''),data:contDia(r.Data),quem:String(r.Motorista||'')}; }); return u; }
+function renderContagem(w){
+  w.append(backbar('board','Contagem de materiais — '+curto(state.op.nome)));
+  const mats=(state.cfg.materiaisContagem||[]);
+  if(!mats.length){ w.append(el('div',{class:'empty'},'A lista de materiais ainda não chegou a este aparelho. Tenta daqui a pouco.')); return; }
+  const C=state.cont=(state.cont||{v:{},e:{}}); const ult=ultimasContagens(); const hoje=dstr(nowTs());
+  const nHoje=mats.filter(m=>ult[m.ref]&&ult[m.ref].data===hoje).length;
+  w.append(el('p',{class:'lbl'},'Escreve quanto há de cada material. Deixa em branco o que não contaste (se não há nenhum, escreve 0). Hoje já contados: '+nHoje+' de '+mats.length+'.'));
+  const btn=el('button',{class:'big ok',onclick:()=>confirmContagem()},'');
+  const atualizaBtn=()=>{ const n=Object.keys(C.v).length; btn.textContent='✅  Guardar contagem'+(n?' — '+n+(n>1?' materiais':' material'):''); };
+  const fams=[]; mats.forEach(m=>{ const f=m.fam||'Outros'; if(fams.indexOf(f)<0) fams.push(f); });
+  fams.forEach(f=>{ w.append(el('p',{class:'lbl',style:'margin:18px 0 4px;font-weight:800;font-size:15px'},f));
+    mats.filter(m=>(m.fam||'Outros')===f).forEach(m=>{ const u=ult[m.ref]; const embs=(m.emb&&m.emb.length)?m.emb:[[m.uni||'un',1]]; const feito=u&&u.data===hoje;
+      const inp=el('input',{type:'text',inputmode:'decimal',placeholder:'—',style:'width:96px;font-size:22px;padding:10px;text-align:right;border-radius:10px;border:2px solid #94a3b8'}); inp.value=(C.v[m.ref]!=null?C.v[m.ref]:'');
+      inp.addEventListener('input',()=>{ if(inp.value.trim()==='') delete C.v[m.ref]; else C.v[m.ref]=inp.value; atualizaBtn(); });
+      const sel=el('select',{style:'font-size:16px;padding:11px 6px;border-radius:10px;border:2px solid #94a3b8;max-width:150px'}); embs.forEach((e,i)=>{ const o=el('option',{value:String(i)},e[0]); sel.append(o); }); sel.value=String(C.e[m.ref]||0);
+      sel.addEventListener('change',()=>{ C.e[m.ref]=parseInt(sel.value)||0; });
+      w.append(el('div',{style:'display:flex;gap:10px;align-items:center;padding:10px 2px;border-bottom:1px solid rgba(148,163,184,.35)'},
+        el('div',{style:'flex:1;min-width:0'},el('div',{style:'font-weight:700'},(feito?'✅ ':'')+m.nome),el('div',{style:'font-size:12px;opacity:.75'},u?('última: '+u.contado+' '+u.emb+' · '+u.data.slice(8,10)+'/'+u.data.slice(5,7)+(u.quem?' · '+curto(u.quem):'')):'ainda sem contagem')),
+        inp, sel)); }); });
+  atualizaBtn(); w.append(el('div',{class:'cta',style:'position:sticky;bottom:0;padding:12px 0'},btn));
+}
+function confirmContagem(){ const C=state.cont||{v:{},e:{}}; const mats=(state.cfg.materiaisContagem||[]); const novos=[]; const dh=new Date().toLocaleString('pt-PT'); const dia=dstr(nowTs()); let mau=null;
+  Object.keys(C.v).forEach(ref=>{ const m=mats.find(x=>x.ref===ref); if(!m) return; const v=parseFloat(String(C.v[ref]).replace(/\s/g,'').replace(',','.')); if(!isFinite(v)||v<0){ mau=mau||m.nome; return; }
+    const embs=(m.emb&&m.emb.length)?m.emb:[[m.uni||'un',1]]; const e=embs[C.e[ref]||0]||embs[0];
+    novos.push({ ID:'CNT-'+(state.op.pin||'x')+'-'+nowTs()+'-'+ref.replace(/\W/g,'').slice(0,14), Data:dia, Motorista:state.op.nome, Ref:ref, Material:m.nome, Quantidade:String(Math.round(v*e[1]*1000)/1000), Unidade:m.uni||'', Contado:String(v), Embalagem:e[0], DataHoraRegisto:dh }); });
+  if(mau){ toast('Número inválido em: '+mau,'err'); return; }
+  if(!novos.length){ toast('Ainda não escreveste nenhuma contagem','err'); return; }
+  saveContQ(loadContQ().concat(novos)); syncContQ(); state.cont=null;
+  toast('Contagem guardada — '+novos.length+(novos.length>1?' materiais':' material'),'ok'); state.view='board'; render(); }
+
 function renderStockMap(w){
   w.append(backbar('board','Stock — '+curto(state.op.nome)));
   w.append(el('div',{class:'cta',style:'position:static;padding:0 0 12px'},
@@ -1552,7 +1603,7 @@ async function syncPertQueue(){
     _syncingP=false;
   }
 }
-setInterval(()=>{ try{ syncQueue(); syncPertQueue(); syncStockQ(); }catch(e){} }, 30000); // reenvia as filas automaticamente (quando a rede volta)
+setInterval(()=>{ try{ syncQueue(); syncPertQueue(); syncStockQ(); syncContQ(); }catch(e){} }, 30000); // reenvia as filas automaticamente (quando a rede volta)
 
 /* ---- UMA JANELA POR POSTO ---------------------------------------------------
    Duas janelas do mesmo quiosque partilham o localStorage mas cada uma tem o seu estado
@@ -2678,7 +2729,7 @@ setInterval(()=>{
   fecharFimDeTurno();       // põe as contas em dia se ficou algo aberto da véspera
   state.view='board'; render();
   reconcileTrabAbertos();   // recuperar JA os trabalhos que este aparelho tenha perdido
-  window.addEventListener('online',()=>{ syncQueue(); syncPertQueue(); syncStockQ(); });
+  window.addEventListener('online',()=>{ syncQueue(); syncPertQueue(); syncStockQ(); syncContQ(); });
 })();
 
 /* ---- Wake Lock: manter o ecrã aceso (telemóveis não auto-bloqueiam → continuam a enviar batimento e ficam visíveis no Painel) ---- */
