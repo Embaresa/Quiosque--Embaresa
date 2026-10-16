@@ -406,7 +406,12 @@ function objetivoOperacao(op, artigo){ const h=objetivoOficial(op,artigo); if(h>
 function parseObjetivoMs(str){ if(!str) return 0; str=String(str).trim();
   if(str.indexOf(':')>=0){ const p=str.split(':').map(Number); return (((p[0]||0)*3600)+((p[1]||0)*60)+(p[2]||0))*1000; }
   const v=parseFloat(str.replace(',','.')); return isNaN(v)?0:v*3600000; }
-function objetivoMsJob(j){ const per=parseObjetivoMs(objetivoOperacao(j.operacao, j.artigo)); const cx=(j.series||[]).reduce((t,s)=>t+(caixasDaSerie(s)||1),0); return per*Math.max(1,cx); }   // conjuntos N* contam N caixas
+// 16-10: etapas que vieram do stock de componentes saem do objetivo desta equipa (ex.: cunhas E2 = 20 % da montagem)
+function fatorStockJob(j){ if(typeof etapasDe!=='function') return 1; const et=etapasDe(j.artigo,j.operacao); if(!et) return 1;
+  const s=new Set(etapasDoStock(j.artigo,(j.series||[])[0],j.operacao)); if(state._etSel&&state._etSel.j===j.id) (state._etSel.stk||[]).forEach(n=>s.add(n));
+  let p=0; et.forEach(e=>{ if(s.has(Number(e.n))) p+=Number(e.peso)||0; }); return Math.max(0,1-p); }
+function objetivoMsJob(j){ return objetivoMsJobBase(j)*fatorStockJob(j); }
+function objetivoMsJobBase(j){ const per=parseObjetivoMs(objetivoOperacao(j.operacao, j.artigo)); const cx=(j.series||[]).reduce((t,s)=>t+(caixasDaSerie(s)||1),0); return per*Math.max(1,cx); }   // conjuntos N* contam N caixas
 function fmtHM(ms){ const m=Math.max(0,Math.round(ms/60000)); return two(Math.floor(m/60))+':'+two(m%60); }
 /* ---- velocímetro (efetivo vs objetivo) ---- */
 function pol(cx,cy,r,deg){ const a=deg*Math.PI/180; return [cx+r*Math.cos(a), cy-r*Math.sin(a)]; }
@@ -472,6 +477,7 @@ function render(){
     else if(state.view==='logistica') renderLogistica(w);
     else if(state.view==='percurso') renderPercurso(w);
     else if(state.view==='artigo') renderArtigo(w);
+    else if(state.view==='compstock') renderCompStock(w);
     else if(state.view==='planos') renderPlanos(w);
     else if(state.view==='stockmap') renderStockMap(w);
     else if(state.view==='stockmov') renderStockMov(w);
@@ -954,9 +960,10 @@ function imgFase(fl,fase,art){ const fs=faseP(fase); const nomes=fs?fs.img:['cai
   im.onerror=tenta; tenta(); return im; }
 function lerFases(){ try{ return JSON.parse(localStorage.getItem('q_fases')||'[]'); }catch(e){ return []; } }
 function gravarFases(a){ try{ localStorage.setItem('q_fases',JSON.stringify(a)); }catch(e){} }
-async function syncFases(){ const url=state.cfg&&state.cfg.urlFases; if(!url) return; const a=lerFases(); let mudou=false;
+var _fasesAndar=false;   // 16-10: duas chamadas ao mesmo tempo (etapas + fase) enviavam as mesmas linhas 2x
+async function syncFases(){ const url=state.cfg&&state.cfg.urlFases; if(!url) return; if(_fasesAndar){ setTimeout(syncFases,3000); return; } _fasesAndar=true; try{ const a=lerFases(); let mudou=false;
   for(const r of a){ if(r._env) continue; try{ const x=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(r)}); if(x.ok){ r._env=1; mudou=true; } }catch(e){} }
-  if(mudou) gravarFases(a); }
+  if(mudou){ const b=lerFases(); const env={}; a.forEach(r=>{ if(r._env) env[r.ID]=1; }); b.forEach(r=>{ if(env[r.ID]) r._env=1; }); gravarFases(b); } } finally{ _fasesAndar=false; } }
 async function loadFasesNuvem(){ const url=state.cfg&&state.cfg.urlFasesLer; if(!url) return;
   try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); let x=await r.json(); if(!Array.isArray(x)) x=(x&&x.value)||[]; state._fasesNuvem=x; }catch(e){} }
 // fases concluídas de uma caixa → Map fase → dia em que ficou concluída
@@ -1085,14 +1092,22 @@ function registarEtapas(j, nums){ if(!nums||!nums.length) return; const a=lerFas
   (j.series||[]).forEach(s=>nums.forEach(n=>a.push({ ID:'ET-'+nowTs()+'-'+s+'-'+n, Data:dstr(nowTs()), Artigo:j.artigo, Serie:s, Fase:'E'+n, Operacao:j.operacao, Quem:quem, Dispositivo:deviceName(), DataHoraRegisto:new Date().toLocaleString('pt-PT'), Job:j.id })));
   gravarFases(a); syncFases(); }
 function blocoEtapas(w,j){ const et=etapasDe(j.artigo,j.operacao); if(!et) return null;
-  if(!state._etSel||state._etSel.j!==j.id) state._etSel={j:j.id,s:[]}; const sel=state._etSel.s;
   const feitas=etapasFeitas(j.artigo,(j.series||[])[0],j.operacao,j.id);
+  const doStock=etapasDoStock(j.artigo,(j.series||[])[0],j.operacao);
+  // 16-10: etapa que tem componente para stock vem marcada "veio do stock" quando há jogos prontos (pode-se desmarcar)
+  if(!state._etSel||state._etSel.j!==j.id){ const stk=[]; et.forEach(e=>{ const c=compParaEtapa(j.artigo,j.operacao,e.nome); if(c && !feitas.has(Number(e.n)) && stockComp(c.id)>0) stk.push(Number(e.n)); }); state._etSel={j:j.id,s:[],stk}; }
+  const sel=state._etSel.s, stk=state._etSel.stk||(state._etSel.stk=[]);
   w.append(el('p',{class:'lbl'},'O que ficou feito neste turno? (toca nas etapas que ACABARAM)'));
   const l=el('div',{class:'list',style:'margin-bottom:12px'});
-  et.forEach(e=>{ const ja=feitas.has(Number(e.n)), on=sel.includes(Number(e.n));
-    l.append(el('button',{class:'item',style:(ja?'opacity:.4;text-decoration:line-through;':'')+(on?'border-color:#34d399;background:#0f3b2c;':''),onclick:()=>{ if(ja){ toast('Esta etapa já foi feita noutro turno','warn'); return; } const i=sel.indexOf(Number(e.n)); if(i>=0) sel.splice(i,1); else sel.push(Number(e.n)); render(); }},
-      el('span',{class:'t'},el('b',{},(on?'✅ ':ja?'✔ ':'')+e.n+'. '+e.nome),el('small',{},ja?'já feita':Math.round(Number(e.peso)*100)+' % do trabalho')))); });
-  w.append(l); return {et,sel,feitas}; }
+  et.forEach(e=>{ const n=Number(e.n), ja=feitas.has(n), on=sel.includes(n), c=compParaEtapa(j.artigo,j.operacao,e.nome), st=!ja&&stk.includes(n);
+    l.append(el('button',{class:'item',style:(ja||st?'opacity:.55;':'')+(ja?'text-decoration:line-through;':'')+(on?'border-color:#34d399;background:#0f3b2c;':''),onclick:()=>{ if(ja){ toast(doStock.has(n)?'Esta etapa veio do stock':'Esta etapa já foi feita noutro turno','warn'); return; } if(st){ toast('Está marcada "veio do stock" — toca no botão amarelo para mudar','warn'); return; } const i=sel.indexOf(n); if(i>=0) sel.splice(i,1); else sel.push(n); render(); }},
+      el('span',{class:'t'},el('b',{},(on?'✅ ':(st||doStock.has(n))?'📦 ':ja?'✔ ':'')+e.n+'. '+e.nome),el('small',{},doStock.has(n)?'veio do stock':ja?'já feita':st?'veio do stock — não conta para esta equipa':Math.round(Number(e.peso)*100)+' % do trabalho'))));
+    if(c && !ja){ const n0=stockComp(c.id);
+      l.append(el('button',{class:'item',style:'margin:-6px 0 4px 26px;padding:8px 12px;border-left:4px solid #eab308;'+(st?'background:#3b2f0b;':''),onclick:()=>{ const i=stk.indexOf(n); if(i>=0) stk.splice(i,1); else { stk.push(n); const k=sel.indexOf(n); if(k>=0) sel.splice(k,1); } render(); }},
+        el('span',{class:'t'},el('b',{},(st?'☑ ':'☐ ')+'📦 '+c.nome+' veio do stock'),el('small',{},'em stock: '+Math.max(0,n0)+' jogo(s)'+(n0<=0?' — sem stock registado':''))))); } });
+  w.append(l);
+  const usos=()=>stk.filter(n=>!feitas.has(n)).map(n=>({ n, c:compParaEtapa(j.artigo,j.operacao,(et.find(e=>Number(e.n)===n)||{}).nome) })).filter(u=>u.c);
+  return {et,sel,feitas,stk,usos}; }
 function renderFimFase(w,j,f){
   const fl=fluxoDoArtigo(j.artigo); const prox=proxFase(fl,f.id);
   w.append(el('p',{class:'lbl'},f.ic+' '+f.nome+' da caixa '+(j.series||[]).join(', ')+' — ficou concluída?'));
@@ -1101,11 +1116,11 @@ function renderFimFase(w,j,f){
   const meuW=()=>state.op?j.workers.find(x=>x.pin===state.op.pin && !x.endTs):null;
   const sim=el('button',{class:'pc-cx fim-sim',onclick:()=>{
     // concluída: as etapas que ainda faltavam ficaram feitas neste turno
-    if(B){ const resto=B.et.map(e=>Number(e.n)).filter(n=>!B.feitas.has(n)); const w0=meuW(); if(w0) w0.etapas=resto; registarEtapas(j,resto); }
+    if(B){ const us=B.usos(); usarStock(j,us); const resto=B.et.map(e=>Number(e.n)).filter(n=>!B.feitas.has(n) && !us.some(u=>u.n===n)); const w0=meuW(); if(w0){ w0.etapas=resto; if(us.length) w0.stock=us.map(u=>u.n); } registarEtapas(j,resto); }
     registarFase(j,f.id); state._qty=(j.series||[]).length||1; finishJob(j); }});
   sim.append(imgFase(fl,prox?prox.id:f.id,j.artigo), el('b',{},'✅ Sim, concluída'), el('small',{},prox?('a caixa passa para "'+prox.nome+'"'):'a caixa fica pronta'));
   const myW=state.op?j.workers.find(x=>x.pin===state.op.pin && !x.endTs):null;
-  const nao=el('button',{class:'pc-cx',onclick:()=>{ if(B){ if(!B.sel.length && !confirm('Não marcaste nenhuma etapa.\n\nNenhuma etapa ficou acabada neste turno?')) return; if(myW) myW.etapas=B.sel.slice(); registarEtapas(j,B.sel.slice()); } if(myW){ state.jobPhase='menu'; leaveWorker(j,myW); } else { state.jobPhase='menu'; render(); } }});
+  const nao=el('button',{class:'pc-cx',onclick:()=>{ if(B){ const us=B.usos(); if(!B.sel.length && !us.length && !confirm('Não marcaste nenhuma etapa.\n\nNenhuma etapa ficou acabada neste turno?')) return; usarStock(j,us); if(myW){ myW.etapas=B.sel.slice(); if(us.length) myW.stock=us.map(u=>u.n); } registarEtapas(j,B.sel.slice()); } if(myW){ state.jobPhase='menu'; leaveWorker(j,myW); } else { state.jobPhase='menu'; render(); } }});
   nao.append(imgFase(fl,f.id,j.artigo), el('b',{},'⏸ Não, continua depois'), el('small',{},'o teu tempo fica registado; a caixa fica nesta fase'));
   g.append(sim,nao); w.append(g); }
 // 15-10: ela — transporte, stock e contagem "passam para dentro da logística"
@@ -1121,6 +1136,59 @@ function renderLogistica(w){
     op('🚛','Stock (motoristas)','entradas e saídas de caixas por número de série','#3b82f6',pin('stock')),
     op('📋','Contagem de materiais','contagem diária dos motoristas','#8b5cf6',pin('contagem')),
     op('🛠️','Outro trabalho de logística','organização, cargas, movimentação…','#eab308',()=>{ state.intent='work'; state._areaPre=log; state.op=null; state.pinbuf=''; state.view='pin'; render(); }))); }
+/* ---- 16-10: COMPONENTES PARA STOCK. Ela: "ponho um colaborador a montar cunhas e forrá-las mas tanto servem para esquerdo como
+   para direito". Preparar componentes comuns passa a ser um trabalho à parte, contado em JOGOS (1 jogo = componentes de 1 caixa),
+   sem nº de série: artigo "Componentes stock", operação "Stock — <nome>", série "N*<id>-xxxx" (o N* faz contar N jogos no objetivo).
+   Lista em config.componentesStock (publicar-componentes-stock.ps1, a partir do Excel das escolhas dela). Ao concluir grava-se na
+   folha Fases uma linha STK+ (Job = jogos feitos); na montagem a etapa correspondente pode vir "do stock": grava STK- (gasta 1 jogo
+   por caixa) + a etapa com Quem "STOCK" (não conta para a equipa; vai nos Comentários "[stock: n]"). ---- */
+function compsDaArea(){ const l=(state.cfg&&state.cfg.componentesStock)||[]; return state.area? l.filter(c=>state.area.includes(c.unidade)) : l; }
+function compPorId(id){ return ((state.cfg&&state.cfg.componentesStock)||[]).find(c=>c.id===id)||null; }
+function compDoJob(j){ if(!j) return null; if(j.comp) return compPorId(j.comp.id); return ((state.cfg&&state.cfg.componentesStock)||[]).find(c=>('Stock — '+c.nome)===j.operacao)||null; }
+function linhasStock(){ const m={}; lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ if(/^STK[+-]$/.test(String(r.Fase||''))) m[r.ID]=r; }); return Object.values(m); }
+function stockComp(id){ let n=0; linhasStock().forEach(r=>{ if(String(r.Artigo)!=='COMP:'+id) return; if(r.Fase==='STK+') n+=Math.max(0,parseInt(r.Job)||0); else n-=1; }); return n; }
+function compParaEtapa(artigo,op,nome){ return ((state.cfg&&state.cfg.componentesStock)||[]).find(c=>c.op===op && c.etapa===nome && (c.caixas||[]).includes(artigo))||null; }
+function registarStockComp(j,qtd){ const c=compDoJob(j); if(!c||!(qtd>0)) return; const a=lerFases(); const quem=(j.workers||[]).map(w=>w.opCurto).filter(Boolean).join(', ');
+  a.push({ ID:'SP-'+nowTs()+'-'+c.id, Data:dstr(nowTs()), Artigo:'COMP:'+c.id, Serie:(j.series||[]).join(' '), Fase:'STK+', Operacao:c.nome, Quem:quem, Dispositivo:deviceName(), DataHoraRegisto:new Date().toLocaleString('pt-PT'), Job:String(qtd) });
+  gravarFases(a); syncFases(); }
+function usarStock(j,usos){ if(!usos||!usos.length) return; const a=lerFases(); const t=nowTs(), dh=new Date().toLocaleString('pt-PT');
+  (j.series||[]).forEach(s=>usos.forEach(u=>{
+    a.push({ ID:'SU-'+t+'-'+s+'-'+u.c.id, Data:dstr(t), Artigo:'COMP:'+u.c.id, Serie:s, Fase:'STK-', Operacao:u.c.nome, Quem:'STOCK', Dispositivo:deviceName(), DataHoraRegisto:dh, Job:j.id });
+    a.push({ ID:'ES-'+t+'-'+s+'-'+u.n, Data:dstr(t), Artigo:j.artigo, Serie:s, Fase:'E'+u.n, Operacao:j.operacao, Quem:'STOCK', Dispositivo:deviceName(), DataHoraRegisto:dh, Job:j.id }); }));
+  gravarFases(a); syncFases(); }
+function etapasDoStock(artigo,serie,op){ const s=String(serie||'').toUpperCase(), a=String(artigo||'').trim().toLowerCase(), f=new Set();
+  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const m=String(r.Fase||'').match(/^E(\d+)$/); if(!m||r.Quem!=='STOCK') return;
+    if(String(r.Serie||'').toUpperCase()===s && String(r.Artigo||'').trim().toLowerCase()===a && String(r.Operacao||'')===String(op||'')) f.add(Number(m[1])); });
+  return f; }
+function renderCompStock(w){
+  w.append(backbar('artigo','🧰 Componentes para stock'));
+  w.append(el('p',{class:'muted'},'Preparas componentes que ficam prontos para várias caixas. Conta-se em JOGOS (1 jogo = os componentes de uma caixa), sem número de série.'));
+  const l=el('div',{class:'list'});
+  compsDaArea().forEach(c=>{ const on=state._csel===c.id; const n=stockComp(c.id);
+    l.append(el('button',{class:'item',style:on?'border-color:#34d399;background:#0f3b2c;':'',onclick:()=>{ state._csel=on?null:c.id; state._cn=1; render(); }},
+      el('span',{class:'t'}, el('b',{},(on?'✅ ':'')+c.nome), el('small',{}, 'serve: '+(c.caixas||[]).join(', ')+' · objetivo '+String(c.obj).replace('.',',')+' h por jogo'+(c.contar!==false?' · em stock: '+Math.max(0,n)+' jogo(s)':''))),
+      el('span',{class:'chev'},on?'✓':'›')));
+    // a quantidade aparece logo por baixo do componente escolhido (não lá no fundo da lista)
+    if(on){ const bx=el('div',{style:'padding:10px 4px 16px 18px;border-left:4px solid #34d399;margin:-4px 0 8px 10px'});
+      bx.append(el('p',{class:'lbl',style:'margin:0 0 6px'},'Quantos jogos vais fazer agora?'));
+      const box=el('div',{class:'qtybox'});
+      box.append(el('button',{onclick:()=>{ state._cn=Math.max(1,(state._cn||1)-1); render(); }},'−'));
+      box.append(el('div',{class:'v'},String(state._cn||1)));
+      box.append(el('button',{onclick:()=>{ state._cn=(state._cn||1)+1; render(); }},'+'));
+      bx.append(box);
+      bx.append(el('button',{class:'big ok',style:'margin-top:8px',onclick:()=>startComp(c,state._cn||1)},'▶  Começar — '+(state._cn||1)+' jogo(s)'));
+      l.append(bx); } });
+  w.append(l); }
+function startComp(c,n){
+  const op='Stock — '+c.nome;
+  const existing=state.jobs.find(j=>j.status!=='done' && j.operacao===op);
+  if(!podeComecarOutro(state.op, existing)) return;
+  const worker={ op:state.op.nome, opCurto:curto(state.op.nome), pin:state.op.pin, startTs:nowTs(), pauses:[], status:'running', endTs:null };
+  if(existing){ if(existing.workers.some(x=>x.pin===state.op.pin && !x.endTs)){ toast('Já estás neste trabalho','err'); state.view='board'; render(); return; }
+    existing.workers.push(worker); save(); pushTrabAberto(existing,'aberto'); toast('Juntaste-te à equipa ('+jobWorkersAtivos(existing).length+' operadores)','ok'); state.view='board'; render(); return; }
+  const j={ id:'J'+Date.now(), artigo:'Componentes stock', programa:'Componentes', operacao:op, unidade:c.unidade, modo:'Stock',
+    series:[n+'*'+c.id+'-'+Date.now().toString(36).slice(-4).toUpperCase()], plano:'', dia:dstr(nowTs()), status:'open', workers:[worker], comp:{id:c.id,n} };
+  state.jobs.push(j); save(); pushTrabAberto(j,'aberto'); toast('Começaste '+n+' jogo(s): '+c.nome,'ok'); state.view='board'; render(); }
 function renderArea(w){
   w.append(backbar('board', 'Olá, '+curto(state.op.nome)));
   w.append(el('p',{class:'lbl'},'Em que área vais trabalhar?'));
@@ -1140,6 +1208,8 @@ function renderArtigo(w){
   w.append(backbar('area', 'Olá, '+curto(state.op.nome)));
   w.append(el('div',{class:'chip',style:'margin-bottom:4px'}, 'Área: '+(state.areaNome||'todas')));
   w.append(el('p',{class:'lbl'},'O que vais produzir?'));
+  { const cs=compsDaArea(); if(cs.length) w.append(el('button',{class:'item',style:'border-left:6px solid #eab308;margin-bottom:10px',onclick:()=>{ state._csel=null; state._cn=1; state.view='compstock'; render(); }},
+      el('span',{class:'t'}, el('b',{},'🧰 Preparar componentes para stock'), el('small',{}, cs.length+' componentes · conta-se em jogos, sem número de série')), el('span',{class:'chev'},'›'))); }
   const inp=el('input',{class:'search',placeholder:'Procurar artigo…',value:state._af||'',oninput:(e)=>{state._af=e.target.value;fillArtigos();}});
   w.append(inp);
   const list=el('div',{class:'list',id:'artlist'}); w.append(list);
@@ -1769,8 +1839,9 @@ function renderJob(w){
 
   if(state.jobPhase==='fim' && faseDoTrabalho(j)){ return renderFimFase(w,j,faseDoTrabalho(j)); }   // 15-10: percurso da caixa
   if(state.jobPhase==='fim'){
-    w.append(el('p',{class:'lbl'},'Quantidade concluída (nesta operação)'));
-    state._qty = state._qty || j.series.length || 1;
+    const _cmp=compDoJob(j);
+    w.append(el('p',{class:'lbl'},_cmp?'Quantos jogos ficaram prontos?':'Quantidade concluída (nesta operação)'));
+    state._qty = state._qty || (_cmp?((j.comp&&j.comp.n)||caixasDaSerie((j.series||[])[0])):0) || j.series.length || 1;
     const box=el('div',{class:'qtybox'});
     box.append(el('button',{onclick:()=>{state._qty=Math.max(0,state._qty-1);render();}},'−'));
     box.append(el('div',{class:'v'}, String(state._qty)));
@@ -1818,6 +1889,7 @@ function finishJob(j){
   const restamAtivos = j.workers.some(w=>!w.endTs);   // ainda há colegas nesta operação?
   const opConcluida = !restamAtivos;                    // a operação (e a caixa) só conclui no ÚLTIMO
   if(opConcluida){ j.qty=state._qty; state._qty=null; j.terminadoPor=state.op?state.op.nome:''; }
+  if(opConcluida && compDoJob(j)) registarStockComp(j, j.qty);   // 16-10: jogos prontos entram no stock de componentes
   enqueueRegisto(j, myW, true);                          // regista o meu tempo (a caixa nunca é concluída aqui)
   if(opConcluida){
     j.status='done'; guiado(j,{nome:(state.op?state.op.nome:''),pin:(state.op?state.op.pin:'')});
@@ -1941,7 +2013,7 @@ function enqueueRegisto(j,wk,concluida){
       UnidadeProducao:(j.unidade||unidadeDaOp(j.operacao,j.artigo)), Posto:postoDaUnidade(j.unidade||unidadeDaOp(j.operacao,j.artigo)), Colaborador:wk.op, Modo:j.modo,
       NumSerie:serie, HoraInicio:hhmm(wk.startTs), HoraFim:hhmm(wk.endTs||nowTs()),
       PausasMin:Math.round(pauMs/60000).toString(), Duracao:Math.round(durMs/60000).toString(),
-      Quantidade:'1', Plano:j.plano, Comentarios:(state.cfg&&state.cfg.modoTeste?'TESTE':((j.comentario||'')+(wk.etapas?(' [etapas: '+(wk.etapas.length?wk.etapas.join(','):'nenhuma')+']'):''))), CaixaConcluida:caixaConcl, OperacaoConcluida:(concluida?'Sim':'Nao'),
+      Quantidade:'1', Plano:j.plano, Comentarios:(state.cfg&&state.cfg.modoTeste?'TESTE':((j.comentario||'')+(wk.etapas?(' [etapas: '+(wk.etapas.length?wk.etapas.join(','):'nenhuma')+']'):'')+(wk.stock&&wk.stock.length?(' [stock: '+wk.stock.join(',')+']'):''))), CaixaConcluida:caixaConcl, OperacaoConcluida:(concluida?'Sim':'Nao'),
       Equipa:String((j.workers||[]).length), ConcluidoPor:(concluida?(j.terminadoPor||wk.op):''), DataHoraRegisto:dh });
   });
   try{ wk._reg = true; }catch(e){}   // esta sessão já tem registo — a rede não volta a escrever
@@ -2234,6 +2306,7 @@ async function reconcileTrabAbertos(){
   const url=(state.cfg && state.cfg.urlTrabAbertosLer)||null; if(!url) return;
   if(_recAndar) return;
   _recAndar = true;
+  loadFasesNuvem(); syncFases();   // 16-10: as fases/etapas/stock dos OUTROS aparelhos (a leitura nunca era chamada) + reenviar o que ficou por enviar
   try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); const jj=await r.json(); const rows=jj.value||jj.linhas||(Array.isArray(jj)?jj:[]);
     // BASTA UMA linha "fechado" para o trabalho estar fechado — ver a nota lá em cima.
     guardarHistoricoTrab(rows); if(state.view==='series') render();     // 08-10: a história de cada caixa, para a lista das séries
