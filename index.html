@@ -826,7 +826,7 @@ function confirmOp(){
   else if(state.intent==='transp'){ trNovo(); return; }
   else { state.draft={ artigo:null, operacao:null, modo:'Encomenda', sel:[], stock:'' }; state._prog=null; state._af=''; state.areaNome=null; state.view='area';
     const ap=state._areaPre; state._areaPre=null;
-    if(ap&&ap.comp){ state.area=null; state.areaNome='Componentes'; state._csel=null; state._cn=1; state.view='compstock'; render(); return; }   // 16-10: direto aos componentes
+    if(ap&&ap.comp){ state.area=null; state.areaNome='Componentes'; state._cArea=null; state._csel=null; state._cn=1; state.view='compstock'; render(); return; }   // 16-10: direto aos componentes
     if(ap){ state.area=ap.unidades.slice(); state.areaNome=ap.nome; state.allowedArt=artigosDaArea(); state.view='artigo'; } }      // 15-10: primeiro escolhe-se a ÁREA
   render();
 }
@@ -1165,29 +1165,56 @@ function etapasDoStock(artigo,serie,op){ const s=String(serie||'').toUpperCase()
   lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const m=String(r.Fase||'').match(/^E(\d+)$/); if(!m||r.Quem!=='STOCK') return;
     if(String(r.Serie||'').toUpperCase()===s && String(r.Artigo||'').trim().toLowerCase()===a && String(r.Operacao||'')===String(op||'')) f.add(Number(m[1])); });
   return f; }
+// 16-10: ela — "põe isto em quadrados senão eles perdem-se à procura, tem que ser à prova de preguiçoso".
+// Passo 1 (se se entrou pelo quadrado 🧰 do início): a ÁREA em quadrados grandes. Passo 2: um quadrado por componente,
+// com ícone grande do tipo, o tipo, a caixa e o stock bem visíveis. Escolhido um, aparece em baixo (fixo) "quantos jogos" + Começar.
+function compTipo(c){ const n=c.nome;
+  if(/^Tubos/.test(n)) return {ic:'🔩',t:'Tubos',cor:'#f97316'}; if(/^Base soldada/.test(n)) return {ic:'⬛',t:'Base soldada',cor:'#ef4444'};
+  if(/^Laterais/.test(n)) return {ic:'🧱',t:'Laterais soldadas',cor:'#eab308'}; if(/^Cunhas e berços/.test(n)) return {ic:'📐',t:'Cunhas e berços',cor:'#3b82f6'};
+  if(/^Cunhas e topos/.test(n)) return {ic:'📐',t:'Cunhas e topos',cor:'#3b82f6'}; if(/^Cunhas/.test(n)) return {ic:'📐',t:'Cunhas',cor:'#3b82f6'};
+  if(/^Separadores/.test(n)) return {ic:'🗂️',t:'Separadores',cor:'#a855f7'}; return {ic:'🧩',t:'Componentes',cor:'#10b981'}; }
+function compPara(c){ return c.nome.replace(/^(Tubos|Base soldada|Laterais soldadas|Cunhas e berços|Cunhas e topos|Cunhas|Separadores|Componentes)\s*/,''); }
 function renderCompStock(w){
-  w.append(backbar(state.area?'artigo':'board','🧰 Componentes para stock'));
-  w.append(el('p',{class:'muted'},'Preparas componentes que ficam prontos para várias caixas. Conta-se em JOGOS (1 jogo = os componentes de uma caixa), sem número de série.'));
-  const l=el('div',{class:'list'});
-  const nomeArea=u=>{ const a=AREAS_Q.find(x=>x.unidades.includes(u)); return a?(a.ic+' '+a.nome):u; };
-  const ordem=u=>{ const i=AREAS_Q.findIndex(x=>x.unidades.includes(u)); return i<0?99:i; };
-  let _u=null;
-  compsDaArea().slice().sort((a,b)=>ordem(a.unidade)-ordem(b.unidade)).forEach(c=>{ const on=state._csel===c.id; const n=stockComp(c.id);
-    if(!state.area && c.unidade!==_u){ _u=c.unidade; l.append(el('p',{class:'lbl',style:'margin:14px 0 4px'}, nomeArea(c.unidade))); }   // sem área escolhida: separado por área
-    l.append(el('button',{class:'item',style:on?'border-color:#34d399;background:#0f3b2c;':'',onclick:()=>{ state._csel=on?null:c.id; state._cn=1; render(); }},
-      el('span',{class:'t'}, el('b',{},(on?'✅ ':'')+c.nome), el('small',{}, 'serve: '+(c.caixas||[]).join(', ')+' · objetivo '+String(c.obj).replace('.',',')+' h por jogo'+(c.contar!==false?' · em stock: '+Math.max(0,n)+' jogo(s)':''))),
-      el('span',{class:'chev'},on?'✓':'›')));
-    // a quantidade aparece logo por baixo do componente escolhido (não lá no fundo da lista)
-    if(on){ const bx=el('div',{style:'padding:10px 4px 16px 18px;border-left:4px solid #34d399;margin:-4px 0 8px 10px'});
-      bx.append(el('p',{class:'lbl',style:'margin:0 0 6px'},'Quantos jogos vais fazer agora?'));
-      const box=el('div',{class:'qtybox'});
-      box.append(el('button',{onclick:()=>{ state._cn=Math.max(1,(state._cn||1)-1); render(); }},'−'));
-      box.append(el('div',{class:'v'},String(state._cn||1)));
-      box.append(el('button',{onclick:()=>{ state._cn=(state._cn||1)+1; render(); }},'+'));
-      bx.append(box);
-      bx.append(el('button',{class:'big ok',style:'margin-top:8px',onclick:()=>startComp(c,state._cn||1)},'▶  Começar — '+(state._cn||1)+' jogo(s)'));
-      l.append(bx); } });
-  w.append(l); }
+  const todas=(state.cfg&&state.cfg.componentesStock)||[];
+  const voltar=(fn,titulo)=>el('div',{class:'backbar'}, el('button',{class:'back',onclick:fn},'‹ Voltar'), el('div',{class:'crumb'}, el('b',{},titulo)));
+  const quad='display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;margin-top:8px';
+  // passo 1: área
+  if(!state.area && !state._cArea){
+    w.append(voltar(()=>{ state.view='board'; render(); },'🧰 Componentes para stock'));
+    w.append(el('p',{class:'lbl'},'De que área são os componentes?'));
+    const g=el('div',{style:quad});
+    AREAS_Q.forEach(a=>{ const n=todas.filter(c=>a.unidades.includes(c.unidade)).length; if(!n) return;
+      g.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:8px;padding:22px 18px;min-height:150px;border-left:6px solid '+a.cor,onclick:()=>{ state._cArea=a.id; state._csel=null; state._cn=1; render(); window.scrollTo(0,0); }},
+        el('span',{style:'font-size:46px;line-height:1'},a.ic), el('b',{style:'font-size:22px'},a.nome), el('small',{style:'color:var(--soft)'},n+' componentes'))); });
+    w.append(g); return; }
+  const area=state.area?null:AREAS_Q.find(a=>a.id===state._cArea);
+  const ordT=['Tubos','Base soldada','Laterais soldadas','Componentes','Cunhas','Cunhas e topos','Cunhas e berços','Separadores'];
+  const lista=(state.area?compsDaArea():todas.filter(c=>area&&area.unidades.includes(c.unidade))).slice()
+    .sort((a,b)=>compPara(a).localeCompare(compPara(b),'pt',{numeric:true}) || ordT.indexOf(compTipo(a).t)-ordT.indexOf(compTipo(b).t));   // por caixa, e dentro da caixa pela ordem do trabalho
+  w.append(voltar(()=>{ if(state.area){ state.view='artigo'; } else { state._cArea=null; } state._csel=null; render(); window.scrollTo(0,0); }, '🧰 Componentes para stock'+(area?' — '+area.ic+' '+area.nome:'')));
+  w.append(el('p',{class:'lbl'},'Toca no que vais preparar (conta-se em jogos: 1 jogo = os componentes de uma caixa)'));
+  const g=el('div',{style:quad});
+  lista.forEach(c=>{ const on=state._csel===c.id, tp=compTipo(c), n=Math.max(0,stockComp(c.id));
+    g.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:16px;min-height:170px;border:2px solid '+(on?'#34d399':'transparent')+';border-left:6px solid '+tp.cor+';'+(on?'background:#0f3b2c;':''),onclick:()=>{ state._csel=on?null:c.id; state._cn=1; render(); }},
+      el('div',{style:'display:flex;justify-content:space-between;width:100%;align-items:flex-start'},
+        el('span',{style:'font-size:40px;line-height:1'},on?'✅':tp.ic),
+        el('span',{style:'font-family:var(--mono);font-size:13px;padding:4px 8px;border-radius:8px;background:'+(n?'#0f3b2c;color:#34d399':'#1f2937;color:#9ca3af')},'stock: '+n)),
+      el('b',{style:'font-size:20px;text-align:left'},tp.t),
+      el('div',{style:'font-size:17px;color:#26c9e2;font-weight:700;text-align:left'},compPara(c)),
+      el('small',{style:'color:var(--soft);text-align:left'},String(c.obj).replace('.',',')+' h por jogo'))); });
+  w.append(g);
+  // escolhido: quantidade + começar, fixo em baixo do ecrã
+  const c=state._csel?compPorId(state._csel):null;
+  if(c){ const tp=compTipo(c);
+    const pn=el('div',{style:'position:sticky;bottom:0;margin-top:16px;padding:14px;border-radius:16px;background:#0b1620;border:2px solid #34d399;display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;box-shadow:0 -8px 24px rgba(0,0,0,.5)'});
+    pn.append(el('div',{}, el('div',{style:'font-size:22px;font-weight:800'},tp.ic+' '+tp.t+' — '+compPara(c)), el('div',{style:'color:var(--soft)'},'Quantos jogos vais fazer agora?')));
+    const box=el('div',{class:'qtybox',style:'margin:0'});
+    box.append(el('button',{onclick:()=>{ state._cn=Math.max(1,(state._cn||1)-1); render(); }},'−'));
+    box.append(el('div',{class:'v'},String(state._cn||1)));
+    box.append(el('button',{onclick:()=>{ state._cn=(state._cn||1)+1; render(); }},'+'));
+    pn.append(box);
+    pn.append(el('button',{class:'big ok',style:'margin:0;min-width:240px',onclick:()=>startComp(c,state._cn||1)},'▶  Começar — '+(state._cn||1)+' jogo(s)'));
+    w.append(pn); } }
 function startComp(c,n){
   const op='Stock — '+c.nome;
   const existing=state.jobs.find(j=>j.status!=='done' && j.operacao===op);
