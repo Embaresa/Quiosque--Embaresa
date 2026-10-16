@@ -1107,7 +1107,7 @@ function blocoEtapas(w,j){ const et=etapasDe(j.artigo,j.operacao); if(!et) retur
   et.forEach(e=>{ const n=Number(e.n), ja=feitas.has(n), on=sel.includes(n), c=compParaEtapa(j.artigo,j.operacao,e.nome), st=!ja&&stk.includes(n);
     l.append(el('button',{class:'item',style:(ja||st?'opacity:.55;':'')+(ja?'text-decoration:line-through;':'')+(on?'border-color:#34d399;background:#0f3b2c;':''),onclick:()=>{ if(ja){ toast(doStock.has(n)?'Esta etapa veio do stock':'Esta etapa já foi feita noutro turno','warn'); return; } if(st){ toast('Está marcada "veio do stock" — toca no botão amarelo para mudar','warn'); return; } const i=sel.indexOf(n); if(i>=0) sel.splice(i,1); else sel.push(n); render(); }},
       el('span',{class:'t'},el('b',{},(on?'✅ ':(st||doStock.has(n))?'📦 ':ja?'✔ ':'')+e.n+'. '+e.nome),el('small',{},doStock.has(n)?'veio do stock':ja?'já feita':st?'veio do stock — não conta para esta equipa':Math.round(Number(e.peso)*100)+' % do trabalho'))));
-    if(c && !ja){ const n0=stockComp(c.id);
+    if(c && !ja && (stockComp(c.id)>0 || st)){ const n0=stockComp(c.id);   // 16-10: só se há jogos prontos — na EM2240 marcaram "veio do stock" com o stock a zero
       l.append(el('button',{class:'item',style:'margin:-6px 0 4px 26px;padding:8px 12px;border-left:4px solid #eab308;'+(st?'background:#3b2f0b;':''),onclick:()=>{ const i=stk.indexOf(n); if(i>=0) stk.splice(i,1); else { stk.push(n); const k=sel.indexOf(n); if(k>=0) sel.splice(k,1); } render(); }},
         el('span',{class:'t'},el('b',{},(st?'☑ ':'☐ ')+'📦 '+c.nome+' veio do stock'),el('small',{},'em stock: '+Math.max(0,n0)+' jogo(s)'+(n0<=0?' — sem stock registado':''))))); } });
   w.append(l);
