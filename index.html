@@ -535,7 +535,7 @@ function renderBoard(w){
     w.append(pb);
   }
   const active=state.jobs.filter(j=>j.status!=='done' && jobWorkersAtivos(j).length>0); // esconde os parados (sem ninguem ativo); retomam-se entrando de novo
-  if(!active.length){ if(!state.perts.length) w.append(el('div',{class:'empty'},'Sem trabalhos a decorrer.')); return; }
+  if(!active.length){ if(!state.perts.length && !outrosVisiveis().length) w.append(el('div',{class:'empty'},'Sem trabalhos a decorrer.')); blocoOutros(w); return; }
   w.append(el('p',{class:'lbl',style:'margin-top:6px'},'Trabalhos'));
   const board=el('div',{class:'board'});
   for(const j of active){
@@ -558,7 +558,31 @@ function renderBoard(w){
     board.append(c);
   }
   w.append(board);
+  blocoOutros(w);
 }
+/* ---- 16-10: ela — "no meu portátil quero ver tudo". Nos aparelhos da lista config.aparelhosVerTudo o quadro mostra também,
+   SÓ PARA VER, os trabalhos abertos hoje noutros aparelhos (da nuvem, Trabalhos Abertos). Nos tablets da fábrica não aparece,
+   para ninguém tentar abrir um trabalho que não é daquele aparelho. ---- */
+function verTudo(){ const l=(state.cfg&&state.cfg.aparelhosVerTudo)||[]; return l.indexOf(deviceName())>=0 || (!!state._pcNome && l.indexOf(state._pcNome)>=0); }
+function outrosVisiveis(){ return verTudo() ? (state._outros||[]) : []; }
+function outrosAbertos(rows){ const eu=deviceName(), hoje=dstr(nowTs()), g={};
+  (rows||[]).forEach(x=>{ const id=String(x.ID||''); if(!id) return; if(!g[id]) g[id]={prim:x, ult:x, fechado:false};
+    if(/^sair:/.test(String(x.Estado||''))) return; g[id].ult=x; if(/^fechad|^fechar/.test(String(x.Estado||''))) g[id].fechado=true; });
+  return Object.values(g).filter(o=>!o.fechado && String(o.ult.Dispositivo||'')!==eu && trabDataISO(o.ult.Data)===hoje)
+    .map(o=>({ disp:o.ult.Dispositivo||'?', artigo:o.ult.Artigo||'', op:o.ult.Operacao||'', series:o.ult.Series||'', quem:o.ult.Operadores||'—',
+      inicio:trabTs(o.prim.DataHoraRegisto)||nowTs() }))
+    .sort((a,b)=>String(a.disp).localeCompare(String(b.disp))||a.inicio-b.inicio); }
+function blocoOutros(w){ const l=outrosVisiveis(); if(!l.length) return;
+  w.append(el('p',{class:'lbl',style:'margin-top:14px'},'👀 Noutros aparelhos — só para ver ('+l.length+')'));
+  const b=el('div',{class:'board'});
+  l.forEach(o=>b.append(el('div',{class:'m run',style:'cursor:default;opacity:.85'},
+    el('div',{class:'mh'}, el('span',{class:'prog'},'📟 '+o.disp), el('span',{class:'badge run'},'Aberto')),
+    el('div',{class:'art'}, o.artigo),
+    el('div',{style:'font-size:12.5px;color:var(--soft);margin:-4px 0 9px;line-height:1.3'}, o.op),
+    el('div',{class:'foot'}, el('div',{class:'op'},'Operador(es)', el('b',{},o.quem),
+      el('div',{class:'timer','data-outro':String(o.inicio),style:'font-size:16px;margin-top:6px'}, fmtDur(nowTs()-o.inicio)))),
+    el('div',{class:'ser'}, o.series||'sem série'))));
+  w.append(b); }
 /* ---- 15-10: ela — "falta indicadores" no ecrã inicial → a eficiência por área desta semana contra a anterior, com as MESMAS
    regras do Painel por área / Ranking da KPI (trabalho = série+operação; conta na semana em que acabou e só se já acabou;
    fora: objetivo irrealista e registos 4× fora do normal). Os números vêm já feitos do PC (indicadores-quiosque.json / fluxo urlIndicadoresLer). ---- */
@@ -595,7 +619,7 @@ function ctaBoard(){
   const cta=el('div',{class:'cta'}, el('div',{class:'ctahd'},'▶ Iniciar trabalho — escolhe a área'), areas, el('div',{class:'ctahd',style:'margin-top:6px'},'Outras ações'), acoes);
   if(!state._indQPedido){ state._indQPedido=1; loadIndQ(); setInterval(loadIndQ,10*60*1000); }
   const ind=faixaIndicadores(); if(ind) cta.append(el('div',{class:'ctahd',style:'margin-top:6px'},'📊 Eficiência esta semana — 100 % = no tempo do objetivo'), ind);
-  if(_modoTeste) acoes.append(el('button',{class:'big warn',onclick:()=>{ if(typeof limparDadosDeTeste==='function') limparDadosDeTeste(); }},'🧪  Limpar dados de teste'));
+  if(typeof _modoTeste!=='undefined' && _modoTeste) acoes.append(el('button',{class:'big warn',onclick:()=>{ if(typeof limparDadosDeTeste==='function') limparDadosDeTeste(); }},'🧪  Limpar dados de teste'));
   return cta; }
 
 /* ---- FECHAR TRABALHOS ANTIGOS (dias anteriores esquecidos em aberto) ---- */
@@ -2219,11 +2243,15 @@ async function reconcileTrabAbertos(){
       if(fechados[id]){ fecharSessoesComRegisto(j, 'FECHO À DISTÂNCIA'); j.status='done'; marcarTrabFechado(id); mudou=true; } });
     if(mudou){ save(); if(state.view==='board') render(); }
     recuperarTrabAbertos(rows);
+    state._outros=outrosAbertos(rows); if(state.view==='board' && verTudo()) render();   // 16-10: ver tudo no portátil dela
   }catch(e){}
   finally{ _recAndar = false; }
 }
 setInterval(syncTrabAbertos, 60000);
-setInterval(reconcileTrabAbertos, 180000);   // de 3 em 3 minutos chega: fechar um trabalho nao e urgente ao segundo
+setInterval(reconcileTrabAbertos, 180000);
+// 16-10: nos aparelhos "ver tudo" a lista dos outros aparelhos refresca-se de minuto a minuto; o nome do PC vem do servidor local
+setInterval(()=>{ if(verTudo()) reconcileTrabAbertos(); }, 60000);
+fetch('/api/dispositivo',{cache:'no-store'}).then(r=>r.ok?r.json():null).then(x=>{ if(x&&x.nome){ state._pcNome=x.nome; if(state.view==='board') render(); } }).catch(()=>{});   // de 3 em 3 minutos chega: fechar um trabalho nao e urgente ao segundo
 
 /* ---- "Os meus trabalhos abertos" (encerrar a partir de qualquer aparelho) ---- */
 let _meusTrab=[];
@@ -3108,6 +3136,7 @@ setInterval(()=>{
   document.querySelectorAll('[data-tespera]').forEach(t=>{ const j=state.jobs.find(x=>x.id===t.getAttribute('data-tespera')); if(j&&j.transp)t.textContent=fmtDur(trEsperaMs(j)); });
   document.querySelectorAll('.minigauge[data-gj]').forEach(g=>{ const j=state.jobs.find(x=>x.id===g.getAttribute('data-gj')); if(j)g.innerHTML=gaugeMini(activeMs(j),objetivoMsJob(j)); });
   document.querySelectorAll('[data-pert]').forEach(t=>{ const p=state.perts.find(x=>x.id===t.getAttribute('data-pert')); if(p)t.textContent=fmtDur(nowTs()-p.startTs); });
+  document.querySelectorAll('[data-outro]').forEach(t=>{ t.textContent=fmtDur(nowTs()-Number(t.getAttribute('data-outro'))); });
   if(state.view==='job'){ const j=curJob();
     if(j){ const jt=document.querySelector('[data-jtimer]'); if(jt)jt.textContent=fmtDur(activeMs(j));
       const g=$('#gaugewrap'); if(g){ g.innerHTML=''; g.append(gaugeInner(activeMs(j),objetivoMsJob(j))); } } }
