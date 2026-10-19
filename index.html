@@ -896,6 +896,17 @@ function startPert(){ if(!state.pertDraft||!state.pertDraft.motivo){ toast('Esco
   if(pausados.length) save();
   state.perts.push({ id:pid, op:state.op.nome, opCurto:curto(state.op.nome), pin:state.op.pin, motivo:state.pertDraft.motivo, startTs:t, jobs:pausados });
   saveP(); state.pertDraft=null; state.view='board'; toast(pausados.length?'Paragem a decorrer — o teu trabalho ficou em pausa':'Paragem a decorrer','ok'); render(); }
+// 19-10-2026: ela (sim) — COMEÇAR UM TRABALHO FECHA A PARAGEM que a pessoa tinha aberta. Walter e André 19/10: a paragem
+// «Preparação de material para Embalamentos no cliente» ficou aberta 14:24–16:44 por cima do embalamento da EM2377.
+// O trabalho que essa paragem tinha posto em pausa: se é o mesmo, retoma; se é outro, a pessoa saiu dele (fica registado).
+function fecharParagemAoComecar(op, jAlvo){ const pin=String((op&&op.pin)||''), nome=String((op&&op.nome)||''); let n=0;
+  (state.perts||[]).filter(p=>p.pin!=null&&p.pin!==''?String(p.pin)===pin:p.op===nome).forEach(p=>{ const t=nowTs();
+    enqueuePerturbacao(pertRecord(p.op,p.motivo,p.startTs,t));
+    (state.jobs||[]).forEach(j=>(j.workers||[]).forEach(w=>{ if(w.endTs || w.status!=='paused') return; const u=w.pauses[w.pauses.length-1];
+      if(!(u && !u.end && u.pert===p.id)) return; u.end=t; w.pauseMotivo=null;
+      if(j===jAlvo) w.status='running'; else { w.endTs=t; w.status='parado'; enqueueRegisto(j,w,false); } }));
+    state.perts=state.perts.filter(x=>x.id!==p.id); n++; });
+  if(n){ saveP(); save(); } return n; }
 function retomarDaParagem(p){ let n=0; const t=nowTs();
   (state.jobs||[]).forEach(j=>(j.workers||[]).forEach(w=>{ if(w.endTs || w.status!=='paused') return; const u=w.pauses[w.pauses.length-1];
     if(u && !u.end && u.pert===p.id){ u.end=t; w.status='running'; w.pauseMotivo=null; n++; } }));
@@ -1373,6 +1384,7 @@ function startComp(c,n){
   const op='Stock — '+c.nome;
   const existing=state.jobs.find(j=>j.status!=='done' && j.operacao===op);
   if(!podeComecarOutro(state.op, existing)) return;
+  fecharParagemAoComecar(state.op, existing);   // 19-10: começar fecha a paragem aberta
   const worker={ op:state.op.nome, opCurto:curto(state.op.nome), pin:state.op.pin, startTs:nowTs(), pauses:[], status:'running', endTs:null };
   if(existing){ if(existing.workers.some(x=>x.pin===state.op.pin && !x.endTs)){ toast('Já estás neste trabalho','err'); state.view='board'; render(); return; }
     existing.workers.push(worker); save(); pushTrabAberto(existing,'aberto'); toast('Juntaste-te à equipa ('+jobWorkersAtivos(existing).length+' operadores)','ok'); state.view='board'; render(); return; }
@@ -2010,9 +2022,10 @@ function startJobConfirmado(){
   const sig=d.operacao+'|'+series.slice().sort().join(',');
   const existing=state.jobs.find(j=>j.status!=='done' && (j.operacao+'|'+(j.series||[]).slice().sort().join(','))===sig);
   if(!podeComecarOutro(state.op, existing)) return;
+  const nP=fecharParagemAoComecar(state.op, existing);
   const worker={ op:state.op.nome, opCurto:curto(state.op.nome), pin:state.op.pin, startTs:nowTs(), pauses:[], status:'running', endTs:null };
   if(existing){
-    if(existing.workers.some(x=>x.pin===state.op.pin && !x.endTs)){ toast('Já estás neste trabalho','err'); state.view='board'; render(); return; }
+    if(existing.workers.some(x=>x.pin===state.op.pin && !x.endTs)){ toast(nP?'Paragem terminada — voltaste a este trabalho':'Já estás neste trabalho',nP?'ok':'err'); state.view='board'; render(); return; }
     existing.workers.push(worker); save(); pushTrabAberto(existing,'aberto'); toast('Juntaste-te à equipa ('+jobWorkersAtivos(existing).length+' operadores)','ok'); state.view='board'; render(); return;
   }
   const j={ id:'J'+Date.now(), artigo:artJob, programa:d.programa, operacao:d.operacao, unidade:d.unidade,
@@ -2028,7 +2041,7 @@ function startJobConfirmado(){
     a.push({ ID:'FS-'+t+'-'+s, Data:dstr(t), Artigo:d.artigo, Serie:s, Fase:'sold', Operacao:'(estrutura '+liga.serie+')', Quem:'ESTRUTURA', Dispositivo:deviceName(), DataHoraRegisto:dh });
     gravarFases(a); syncFases(); j.estrutura=liga.serie; j.comentario=(j.comentario?j.comentario+' ':'')+'[estrutura '+liga.serie+']'; }
   d._estrLiga=false;
-  state.jobs.push(j); save(); pushTrabAberto(j,'aberto'); toast('Trabalho iniciado','ok'); state.view='board'; render();
+  state.jobs.push(j); save(); pushTrabAberto(j,'aberto'); toast(nP?'Trabalho iniciado — a tua paragem foi terminada':'Trabalho iniciado','ok'); state.view='board'; render();
 }
 
 /* ---- DETALHE / PAUSA / FIM ---- */
