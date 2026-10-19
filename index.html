@@ -885,11 +885,23 @@ function renderPertMotivo(w){
   w.append(el('div',{class:'cta',style:'position:static;padding:16px 0 0'},
     el('button',{class:'big warn',onclick:startPert},'⏸  Começar paragem')));
 }
+// 19-10-2026: ela — "quando estão a fazer algo e param para almoço não quero o tempo a duplicar". A paragem começada no ecrã
+// principal não parava o trabalho aberto: o registo do trabalho contava também a refeição (Pedro 19/10: 356 min com 40 de
+// paragens dentro). Agora a paragem PAUSA o(s) trabalho(s) que a pessoa tem a correr e, ao terminar, retoma-os. A pausa não tem
+// motivo (a paragem já fica registada por si) — assim não sai a dobrar nas paragens. Os transportes ANN têm a espera própria.
 function startPert(){ if(!state.pertDraft||!state.pertDraft.motivo){ toast('Escolhe o motivo','err'); return; }
-  state.perts.push({ id:'P'+Date.now(), op:state.op.nome, opCurto:curto(state.op.nome), motivo:state.pertDraft.motivo, startTs:nowTs() });
-  saveP(); state.pertDraft=null; state.view='board'; toast('Paragem a decorrer','ok'); render(); }
-function finishPert(p){ enqueuePerturbacao(pertRecord(p.op,p.motivo,p.startTs,nowTs()));
-  state.perts=state.perts.filter(x=>x.id!==p.id); saveP(); state.view='board'; toast('Paragem terminada e registada','ok'); render(); }
+  const pid='P'+Date.now(), t=nowTs(), pausados=[];
+  (state.jobs||[]).forEach(j=>{ if(j.status==='done' || j.transp) return; (j.workers||[]).forEach(w=>{
+    if(String(w.pin)===String(state.op.pin) && !w.endTs && w.status==='running'){ w.status='paused'; w.pauseMotivo=state.pertDraft.motivo; w.pauses.push({ start:t, pert:pid }); pausados.push(j.id); } }); });
+  if(pausados.length) save();
+  state.perts.push({ id:pid, op:state.op.nome, opCurto:curto(state.op.nome), pin:state.op.pin, motivo:state.pertDraft.motivo, startTs:t, jobs:pausados });
+  saveP(); state.pertDraft=null; state.view='board'; toast(pausados.length?'Paragem a decorrer — o teu trabalho ficou em pausa':'Paragem a decorrer','ok'); render(); }
+function retomarDaParagem(p){ let n=0; const t=nowTs();
+  (state.jobs||[]).forEach(j=>(j.workers||[]).forEach(w=>{ if(w.endTs || w.status!=='paused') return; const u=w.pauses[w.pauses.length-1];
+    if(u && !u.end && u.pert===p.id){ u.end=t; w.status='running'; w.pauseMotivo=null; n++; } }));
+  if(n) save(); return n; }
+function finishPert(p){ enqueuePerturbacao(pertRecord(p.op,p.motivo,p.startTs,nowTs())); const nR=retomarDaParagem(p);
+  state.perts=state.perts.filter(x=>x.id!==p.id); saveP(); state.view='board'; toast(nR?'Paragem registada — o teu trabalho voltou a contar':'Paragem terminada e registada','ok'); render(); }
 function openPert(id){ state.curPert=id; state.view='pertdetail'; render(); }
 function curPert(){ return state.perts.find(p=>p.id===state.curPert); }
 function renderPertDetail(w){
