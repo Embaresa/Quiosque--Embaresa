@@ -1037,6 +1037,21 @@ function renderPercurso(w){
   if(state._pescolha){ const pe=state._pescolha; w.append(el('p',{class:'lbl'},([].concat(pe.serie).length>1?'Caixas ':'Caixa ')+[].concat(pe.serie).join(', ')+' — que operação?'));
     const l=el('div',{class:'list'}); pe.ops.forEach(o=>l.append(el('button',{class:'item',onclick:()=>{ state._pescolha=null; state.draft.operacao=o.operacao; state.draft.unidade=o.unidade; state.draft.modo='Encomenda'; state.draft.sel=[].concat(pe.serie); state.draft._fora=false; state._pfase=null; state._psel=null; startJob(); }},el('span',{class:'t'},el('b',{},o.operacao)),el('span',{class:'chev'},'›'))));
     l.append(el('button',{class:'item',style:'opacity:.8',onclick:()=>{ state._pescolha=null; render(); }},el('span',{class:'t'},el('b',{},'‹ Voltar ao percurso')))); w.append(l); return; }
+  if(state._pcont){ const pc=state._pcont, ops=operacoesDoArtigo(art).filter(o=>pc.f.op.test(o.operacao));
+    const info=s=>{ const c=cx.find(x=>x.e.serie===s), et=new Set(); ops.forEach(o=>etapasFeitas(art,s,o.operacao).forEach(n=>et.add(n)));
+      const u=c&&c.ult&&c.ult.dia?' · último trabalho a '+c.ult.dia.slice(8,10)+'/'+c.ult.dia.slice(5,7)+(c.ult.quem?' ('+c.ult.quem+')':''):'';
+      return (et.size?'etapas já feitas: '+[...et].sort((a,b)=>a-b).join(', '):'já tem trabalho começado')+u; };
+    const vai=(s,nota)=>{ state._pcont=null; state.draft._notaCont=nota||null; escolherCaixaFase(pc.f,s,true); };
+    w.append(el('p',{class:'lbl',style:'font-size:20px'},'A caixa '+pc.serie+' é uma caixa nova ou a continuação de um trabalho anterior?'));
+    const g=el('div',{class:'pc-cands'});
+    const bt=(tit,sub,fn,run)=>{ const b=el('button',{class:'pc-cx'+(run?' run':''),onclick:fn}); b.append(imgFase(fl,pc.f.id,art), el('b',{},tit), el('small',{},sub)); g.append(b); };
+    if(pc.esta) bt('🔁 Continuação — continuo a '+pc.serie, info(pc.serie), ()=>vai(pc.serie), true);
+    else bt('🆕 Caixa NOVA — começo do zero', 'a '+pc.serie+' ainda não tem trabalho nesta fase', ()=>vai(pc.serie));
+    pc.outras.forEach(s=>bt('🔁 É a continuação da '+s, info(s)+(pc.esta?'':' — fica na '+s+' e a Sónia confirma o número'),
+      ()=>vai(s, pc.esta?null:'[continuação da '+s+': escolheu primeiro a '+pc.serie+' — confirmar o número impresso na caixa]'), true));
+    w.append(g);
+    w.append(el('button',{class:'big ghost',style:'margin-top:12px',onclick:()=>{ state._pcont=null; render(); }},'‹ Voltar ao percurso'));
+    return; }
   const plano=planoDoArtigo(art); if(plano) w.append(planobar(plano));
   const opsArt=operacoesDoArtigo(art), P=fasesDoFluxo(fl);
   const minhaFase=f=>f.op && opsArt.some(o=>f.op.test(o.operacao) && (!state.area||state.area.includes(o.unidade)));
@@ -1081,7 +1096,14 @@ function renderPercurso(w){
   if(fl.varias) w.append(el('button',{class:'big ok',style:'margin-top:12px;position:sticky;bottom:10px;z-index:4;box-shadow:0 -6px 18px rgba(0,0,0,.5)'+(sel.length?'':';opacity:.6'),onclick:()=>{ if(!sel.length){ toast('Toca primeiro nas caixas que vais fazer','warn'); return; } escolherCaixaFase(f,sel.slice()); }},sel.length?('▶  Começar com '+sel.length+(sel.length===1?' caixa':' caixas')+' ('+sel.join(', ')+')'):'▶  Escolhe as caixas'));
   w.append(el('button',{class:'big ghost',style:'margin-top:12px',onclick:()=>{ state._pfase=null; state.view='operacao'; render(); }},'Outra caixa / ver a lista completa'));
 }
-function escolherCaixaFase(f, serie){
+// 19-10-2026: ela — "quando escolhem a caixa deveria perguntar se é continuação do trabalho anterior ou uma nova caixa".
+// Na sexta a montagem ficou na EM2759 e hoje continuaram-na como EM2760 (o número impresso) → as etapas repetiram-se.
+// Pergunta-se quando a caixa escolhida já está a meio nesta fase, ou quando há OUTRA caixa do mesmo tipo a meio.
+function escolherCaixaFase(f, serie, ok){
+  if(!ok) state.draft._notaCont=null;
+  if(!ok && typeof serie==='string'){ const cx=caixasDoArtigo(state.draft.artigo), aMeio=c=>c.fase===f.id && c.decorrer;
+    const esta=cx.find(c=>c.e.serie===serie), outras=cx.filter(c=>aMeio(c) && c.e.serie!==serie).map(c=>c.e.serie);
+    if((esta && aMeio(esta)) || outras.length){ state._pcont={ f, serie, esta:!!(esta && aMeio(esta)), outras }; render(); return; } }
   const ops=operacoesDoArtigo(state.draft.artigo).filter(o=>f.op.test(o.operacao) && (!state.area||state.area.includes(o.unidade)));
   const vai=o=>{ state.draft.operacao=o.operacao; state.draft.unidade=o.unidade; state.draft.modo='Encomenda'; state.draft.sel=[].concat(serie); state.draft._fora=false; state._pfase=null; state._psel=null; startJob(); };
   if(ops.length===1) return vai(ops[0]);
@@ -1091,16 +1113,17 @@ function escolherCaixaFase(f, serie){
 // 15-10: ETAPAS — a Sónia: "a montagem do KC é composta por muitas operações; o turno da tarde fez a maior parte e os da manhã
 // poucas, mas no final é dividida por todos". No fim do turno a equipa marca as etapas que ACABOU.
 function etapasDe(artigo,op){ const e=(state.cfg&&state.cfg.etapas)||{}; return e[String(artigo||'')+'|'+String(op||'')]||null; }
-function etapasFeitas(artigo,serie,op,jobId){ const s=String(serie||'').toUpperCase(), a=String(artigo||'').trim().toLowerCase(), f=new Set();
+// 19-10: o acerto da caixa (config → acertosFases) também apaga as etapas de antes — a EM2759 tinha as etapas da EM2760
+function etapasFeitas(artigo,serie,op,jobId){ const s=String(serie||'').toUpperCase(), a=String(artigo||'').trim().toLowerCase(), f=new Set(), ac=acertoDaCaixa(artigo,serie);
   lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const m=String(r.Fase||'').match(/^E(\d+)$/); if(!m) return;
-    if(String(r.Serie||'').toUpperCase()===s && String(r.Artigo||'').trim().toLowerCase()===a && String(r.Operacao||'')===String(op||'') && !(jobId && r.Job===jobId)) f.add(Number(m[1])); });
+    if(String(r.Serie||'').toUpperCase()===s && String(r.Artigo||'').trim().toLowerCase()===a && String(r.Operacao||'')===String(op||'') && !(jobId && r.Job===jobId) && !(ac && String(r.Data||'')<=String(ac.Data))) f.add(Number(m[1])); });
   return f; }
 function registarEtapas(j, nums){ if(!nums||!nums.length) return; const a=lerFases(); const quem=(j.workers||[]).filter(w=>!w.endTs).map(w=>w.opCurto).filter(Boolean).join(', ');
   (j.series||[]).forEach(s=>nums.forEach(n=>a.push({ ID:'ET-'+nowTs()+'-'+s+'-'+n, Data:dstr(nowTs()), Artigo:j.artigo, Serie:s, Fase:'E'+n, Operacao:j.operacao, Quem:quem, Dispositivo:deviceName(), DataHoraRegisto:new Date().toLocaleString('pt-PT'), Job:j.id })));
   gravarFases(a); syncFases(); }
 function blocoEtapas(w,j){ const et=etapasDe(j.artigo,j.operacao); if(!et) return null;
   const feitas=etapasFeitas(j.artigo,(j.series||[])[0],j.operacao,j.id);
-  const doStock=etapasDoStock(j.artigo,(j.series||[])[0],j.operacao);
+  const doStock=etapasDoStock(j.artigo,(j.series||[])[0],j.operacao), doJob=etapasDoJob(j);
   // 16-10: etapa que tem componente para stock vem marcada "veio do stock" quando há jogos prontos (pode-se desmarcar)
   if(!state._etSel||state._etSel.j!==j.id){ const stk=[]; et.forEach(e=>{ const c=compParaEtapa(j.artigo,j.operacao,e.nome); if(c && !feitas.has(Number(e.n)) && stockComp(c.id)>0) stk.push(Number(e.n)); }); state._etSel={j:j.id,s:[],stk}; }
   const sel=state._etSel.s, stk=state._etSel.stk||(state._etSel.stk=[]);
@@ -1108,14 +1131,63 @@ function blocoEtapas(w,j){ const et=etapasDe(j.artigo,j.operacao); if(!et) retur
   const l=el('div',{class:'list',style:'margin-bottom:12px'});
   et.forEach(e=>{ const n=Number(e.n), ja=feitas.has(n), on=sel.includes(n), c=compParaEtapa(j.artigo,j.operacao,e.nome), st=!ja&&stk.includes(n);
     l.append(el('button',{class:'item',style:(ja||st?'opacity:.55;':'')+(ja?'text-decoration:line-through;':'')+(on?'border-color:#34d399;background:#0f3b2c;':''),onclick:()=>{ if(ja){ toast(doStock.has(n)?'Esta etapa veio do stock':'Esta etapa já foi feita noutro turno','warn'); return; } if(st){ toast('Está marcada "veio do stock" — toca no botão amarelo para mudar','warn'); return; } const i=sel.indexOf(n); if(i>=0) sel.splice(i,1); else sel.push(n); render(); }},
-      el('span',{class:'t'},el('b',{},(on?'✅ ':(st||doStock.has(n))?'📦 ':ja?'✔ ':'')+e.n+'. '+e.nome),el('small',{},doStock.has(n)?'veio do stock':ja?'já feita':st?'veio do stock — não conta para esta equipa':Math.round(Number(e.peso)*100)+' % do trabalho'))));
+      el('span',{class:'t'},el('b',{},(on?'✅ ':(st||doStock.has(n))?'📦 ':ja?'✔ ':'')+e.n+'. '+e.nome),el('small',{},doStock.has(n)?'veio do stock':ja?'já feita':st?'veio do stock — não conta para esta equipa':(doJob.has(n)?'✔ já marcada neste trabalho (se também trabalhaste nela, toca) · ':'')+Math.round(Number(e.peso)*100)+' % do trabalho'))));
     if(c && !ja && (stockComp(c.id)>0 || st)){ const n0=stockComp(c.id);   // 16-10: só se há jogos prontos — na EM2240 marcaram "veio do stock" com o stock a zero
       l.append(el('button',{class:'item',style:'margin:-6px 0 4px 26px;padding:8px 12px;border-left:4px solid #eab308;'+(st?'background:#3b2f0b;':''),onclick:()=>{ const i=stk.indexOf(n); if(i>=0) stk.splice(i,1); else { stk.push(n); const k=sel.indexOf(n); if(k>=0) sel.splice(k,1); } render(); }},
         el('span',{class:'t'},el('b',{},(st?'☑ ':'☐ ')+'📦 '+c.nome+' veio do stock'),el('small',{},'em stock: '+Math.max(0,n0)+' jogo(s)'+(n0<=0?' — sem stock registado':''))))); } });
   w.append(l);
   const usos=()=>stk.filter(n=>!feitas.has(n)).map(n=>({ n, c:compParaEtapa(j.artigo,j.operacao,(et.find(e=>Number(e.n)===n)||{}).nome) })).filter(u=>u.c);
-  return {et,sel,feitas,stk,usos}; }
+  return {et,sel,feitas,stk,usos,doJob}; }
+// etapas que os colegas DESTE trabalho já marcaram (contam como feitas, mas quem também trabalhou nelas pode marcar)
+function etapasDoJob(j){ const s=String((j.series||[])[0]||'').toUpperCase(), m=new Map();
+  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const x=String(r.Fase||'').match(/^E(\d+)$/); if(!x || r.Job!==j.id || r.Quem==='STOCK' || String(r.Serie||'').toUpperCase()!==s) return;
+    const n=Number(x[1]); if(!m.has(n)) m.set(n,String(r.Quem||'um colega')); }); return m; }
+// 19-10-2026: ela — "uma janela a perguntar que fases fizeste, ele escolhe, e depois abre uma nova janela: a caixa está pronta
+// para ir para o cliente? … à prova de erro". Na EM2759/2760 o botão "concluída" marcou sozinho as etapas que faltavam e deu a
+// caixa como pronta com um colega ainda a trabalhar nela. Agora: 1) que etapas fizeste; 2) só se TODAS estão feitas pergunta se
+// a caixa está pronta; se faltam etapas a caixa fica na fase; se um colega já a deu como pronta, só regista o tempo.
 function renderFimFase(w,j,f){
+  if(!etapasDe(j.artigo,j.operacao)) return renderFimFaseSimples(w,j,f);
+  const fl=fluxoDoArtigo(j.artigo), prox=proxFase(fl,f.id), serie=(j.series||[])[0];
+  if(!state._fimPasso||state._fimPasso.j!==j.id) state._fimPasso={j:j.id,p:1};
+  const P=state._fimPasso, passo=t=>el('div',{class:'chip',style:'margin-bottom:8px'},t);
+  if(P.p===1){
+    w.append(passo('Passo 1 de 2 · caixa '+(j.series||[]).join(', ')));
+    const B=blocoEtapas(w,j);
+    w.append(el('button',{class:'big ok',style:'margin-top:4px',onclick:()=>{ if(!B.sel.length && !B.usos().length && !confirm('Não marcaste nenhuma etapa.\n\nNão acabaste nenhuma etapa neste turno?')) return; P.p=2; render(); }},'Seguinte ➜'));
+    return; }
+  const B=blocoEtapas(el('div'),j), us=B.usos(), agora=new Set(B.sel.concat(us.map(u=>u.n))), doStock=etapasDoStock(j.artigo,serie,j.operacao);
+  const faltam=B.et.filter(e=>{ const n=Number(e.n); return !B.feitas.has(n) && !agora.has(n) && !B.doJob.has(n) && !doStock.has(n); });
+  const conc=fasesConcluidas(j.artigo,serie), ac=acertoDaCaixa(j.artigo,serie), dC=conc.get(f.id);
+  const jaPronta=!!dC && String(dC)>=String(j.dia||'') && !(ac && String(dC)<=String(ac.Data));
+  const meuW=()=>state.op?j.workers.find(x=>x.pin===state.op.pin && !x.endTs):null;
+  const gravarEtapas=()=>{ usarStock(j,us); const w0=meuW(); if(w0){ w0.etapas=B.sel.slice(); if(us.length) w0.stock=us.map(u=>u.n); } registarEtapas(j,B.sel.slice()); };
+  const limpar=()=>{ state._fimPasso=null; state._etSel=null; };
+  const sair=()=>{ const w0=meuW(); gravarEtapas(); limpar(); state.jobPhase='menu'; if(w0) leaveWorker(j,w0); else render(); };
+  const pronta=(registar)=>{ gravarEtapas(); if(registar) registarFase(j,f.id); limpar(); state._qty=(j.series||[]).length||1; finishJob(j); };
+  const voltar=el('button',{class:'big ghost',style:'margin-top:10px',onclick:()=>{ P.p=1; render(); }},'⬅ Voltar às etapas');
+  w.append(passo('Passo 2 de 2 · caixa '+(j.series||[]).join(', ')));
+  const nomes=l=>l.map(n=>{ const e=B.et.find(x=>Number(x.n)===n); return n+'. '+(e?e.nome:''); });
+  w.append(el('div',{class:'flag',style:'border-color:#34d399;color:#d1fae5;margin-bottom:10px'},
+    agora.size?('Marcaste: '+nomes([...agora].sort((a,b)=>a-b)).join(' · ')):'Não marcaste nenhuma etapa neste turno.'));
+  if(jaPronta){
+    w.append(el('p',{class:'lbl'},'✅ Esta caixa já foi dada como pronta por um colega.'));
+    w.append(el('button',{class:'big ok',onclick:()=>pronta(false)},'✅ Registar o meu tempo e sair'));
+    w.append(voltar); return; }
+  if(faltam.length){
+    w.append(el('p',{class:'lbl'},'Ainda faltam '+faltam.length+' etapa(s) nesta caixa:'));
+    const l=el('div',{class:'list',style:'margin-bottom:10px'}); faltam.forEach(e=>l.append(el('div',{class:'item',style:'opacity:.8'},el('span',{class:'t'},el('b',{},'⬜ '+e.n+'. '+e.nome))))); w.append(l);
+    w.append(el('p',{class:'muted',style:'font-size:13px'},'A caixa fica na '+f.nome+' para o próximo turno. Se afinal acabaste alguma destas, volta atrás e marca-a.'));
+    w.append(el('button',{class:'big ok',onclick:sair},'✅ Confirmar e sair'));
+    w.append(voltar); return; }
+  w.append(el('p',{class:'lbl',style:'font-size:20px'},/^mont/.test(f.id)?'Todas as etapas estão feitas. A caixa está pronta para ir para o cliente?':'Todas as etapas estão feitas. A '+f.nome+' está acabada?'));
+  const g=el('div',{class:'pc-cands'});
+  const sim=el('button',{class:'pc-cx fim-sim',onclick:()=>pronta(true)});
+  sim.append(imgFase(fl,prox?prox.id:f.id,j.artigo), el('b',{},'✅ Sim, está pronta'), el('small',{},prox?('a caixa passa para "'+prox.nome+'"'):'a caixa fica pronta'));
+  const nao=el('button',{class:'pc-cx',onclick:sair});
+  nao.append(imgFase(fl,f.id,j.artigo), el('b',{},'⏸ Não, ainda não'), el('small',{},'o teu tempo fica registado; a caixa fica nesta fase'));
+  g.append(sim,nao); w.append(g); w.append(voltar); }
+function renderFimFaseSimples(w,j,f){
   const fl=fluxoDoArtigo(j.artigo); const prox=proxFase(fl,f.id);
   w.append(el('p',{class:'lbl'},f.ic+' '+f.nome+' da caixa '+(j.series||[]).join(', ')+' — ficou concluída?'));
   const g=el('div',{class:'pc-cands'});
@@ -1858,6 +1930,7 @@ function startJobConfirmado(){
   const j={ id:'J'+Date.now(), artigo:d.artigo, programa:d.programa, operacao:d.operacao, unidade:d.unidade,
     modo:d.modo, series, plano:(planoDoArtigo(d.artigo)||{}).codigo||'', dia:dstr(nowTs()), status:'open', workers:[worker] };
   if(foraLista.length){ j.foraLista=foraLista.slice(); j.comentario='[série fora da lista: '+foraLista.join(' ')+' — confirmar]'; }
+  if(d._notaCont){ j.comentario=(j.comentario?j.comentario+' ':'')+d._notaCont; d._notaCont=null; }   // 19-10: continuação de outra caixa
   state.jobs.push(j); save(); pushTrabAberto(j,'aberto'); toast('Trabalho iniciado','ok'); state.view='board'; render();
 }
 
@@ -1902,7 +1975,7 @@ function renderJob(w){
   w.append(list);
   if(!isWorker){ w.append(el('div',{class:'flag'},'⛔ Não estás neste trabalho — só um operador registado nele o pode concluir. (Correções são para o supervisor.)')); return; }
   w.append(el('p',{class:'muted',style:'margin:14px 0 6px;font-size:12px'},'Toca em "Operação concluída" quando terminares esta operação. Para mudar de operação, conclui esta e entra na próxima.'));
-  w.append(el('button',{class:'big ok',style:'margin-top:4px',onclick:()=>{state._qty=null;state.jobPhase='fim';render();}},'✅  Operação concluída (fecha o trabalho)'));
+  w.append(el('button',{class:'big ok',style:'margin-top:4px',onclick:()=>{state._qty=null;state._etSel=null;state._fimPasso=null;state.jobPhase='fim';render();}},'✅  Operação concluída (fecha o trabalho)'));
   if(state.op&&state.op.admin) w.append(el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>abrirCorrigir(j.id)},'✏️  Corrigir trabalho (artigo / série)'));
 }
 function pauseWorker(j,wk){ if(!wk){state.jobPhase='menu';return render();} wk.status='paused'; wk.pauseMotivo=state._rsn||'Paragem'; wk.pauses.push({start:nowTs(),motivo:wk.pauseMotivo}); state._rsn=null; state._pw=null; state.jobPhase='menu'; save(); toast('Em pausa','ok'); state.view='board'; render(); }
