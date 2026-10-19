@@ -474,6 +474,7 @@ function render(){
     else if(state.view==='confirma') renderConfirma(w);
     else if(state.view==='area') renderArea(w);
     else if(state.view==='confcx') renderConfCaixa(w);
+    else if(state.view==='aviso') renderAvisoNovidades(w);
     else if(state.view==='logistica') renderLogistica(w);
     else if(state.view==='percurso') renderPercurso(w);
     else if(state.view==='artigo') renderArtigo(w);
@@ -812,8 +813,27 @@ function tryLogin(){
   if(!op){ toast('PIN não reconhecido','err'); state.pinbuf=''; render(); return; }
   state.pendingOp=op; state.view='confirma'; render();
 }
+// 19-10-2026: ela — "coloca um aviso a explicar quando abrem sessão durante 3 dias" (as mudanças de 19-10: soldadura sem número,
+// montagem leva a estrutura, nova/continuação, fim em 2 passos). Aparece depois do PIN, ao começar ou fechar trabalho, até 22/10.
+const AVISO_ATE='2026-10-22';
+function renderAvisoNovidades(w){ const op=state.pendingOp||{}, sec=String((op.seccao||'')+' '+(op.unidade||'')).toLowerCase();
+  w.append(el('p',{class:'lbl',style:'font-size:22px;color:#f5d27a'},'📢 Novidades no quiosque — lê antes de começar'));
+  const itens=[
+    { k:/sold/, ic:'🔥', t:'SOLDADURA: já não escolhes a caixa.', s:'Toca em «🆕 Nova estrutura» ou na estrutura que está a meio. O quiosque dá-lhe um número sozinho — não é preciso escrever nada na peça.' },
+    { k:/mont/, ic:'🔧', t:'MONTAGEM: escolhe a caixa nova.', s:'O quiosque junta-lhe sozinho a estrutura soldada mais antiga do armazém. As caixas novas só aparecem se houver estruturas soldadas.' },
+    { k:/./,   ic:'🔁', t:'Caixa nova ou continuação?', s:'Se houver trabalho a meio, o quiosque pergunta se é uma caixa nova ou a continuação de um trabalho anterior. Lê com atenção antes de tocar.' },
+    { k:/./,   ic:'✅', t:'No fim, dois passos.', s:'1.º marcas só as etapas que TU acabaste neste turno. 2.º o quiosque pergunta se a caixa está pronta — e só pergunta quando todas as etapas estão feitas.' } ];
+  itens.sort((a,b)=>(b.k.source!=='.'&&b.k.test(sec)?1:0)-(a.k.source!=='.'&&a.k.test(sec)?1:0));
+  const l=el('div',{class:'list',style:'margin-bottom:14px'});
+  itens.forEach(x=>l.append(el('div',{class:'item',style:'align-items:flex-start;padding:14px 16px'+(x.k.source!=='.'&&x.k.test(sec)?';border-color:#f5b52b;background:#2a2108':'')},
+    el('span',{style:'font-size:34px;line-height:1;margin-right:12px'},x.ic), el('span',{class:'t'},el('b',{style:'font-size:18px'},x.t),el('small',{style:'font-size:15px;line-height:1.35'},x.s)))));
+  w.append(l);
+  w.append(el('button',{class:'big ok',onclick:()=>{ state._avisoOk=true; confirmOp(); }},'✅  Percebi'));
+  w.append(el('p',{class:'muted',style:'font-size:12px;margin-top:8px;text-align:center'},'Este aviso aparece até '+AVISO_ATE.slice(8,10)+'/'+AVISO_ATE.slice(5,7)+'. Dúvidas: fala com a Sónia ou com o Rui.')); }
 function confirmOp(){
   const op=state.pendingOp; if(!op){ state.view='pin'; return render(); }
+  if(!state._avisoOk && dstr(nowTs())<=AVISO_ATE && !['pert','contagem','stock','transp','fechof2'].includes(state.intent)){ state.view='aviso'; return render(); }
+  state._avisoOk=false;
   state.op=op; state.area=areaUnidades(op); state.allowedArt=artigosDaArea();
   state.pendingOp=null; state.pinbuf='';
   if(state.intent==='pert'){ state.pertDraft={motivo:null}; state.view='pertmotivo'; }
@@ -1005,12 +1025,42 @@ function estadoCaixa(artigo, e){
   const minimo=est==='embalada'?(iEmb>=0?iEmb+1:L.length):est==='entregue'?iAnn:est==='produzida'?L.indexOf('arm2'):-1;
   if(minimo>pos){ pos=minimo; dec=false; ult=null; }
   return Object.assign(r,{ fase:pos<0?'novo':(pos>=L.length?'fim':L[pos]), decorrer:dec, ult }); }
+// 19-10-2026: SOLDADURA SEM NÚMERO DE CAIXA. Ela: "e se os números só fossem adicionados depois da soldadura? muitas vezes quando
+// soldam não sabem para que é… como garantimos a rastreabilidade" · "nada para escrever nas estruturas" · todas as soldaduras.
+// A soldadura faz uma ESTRUTURA com número do quiosque (S<mmdd>-<hhmmss>, só no sistema), que entra no armazém de estruturas
+// soldadas. Na montagem, a caixa nova leva a estrutura soldada MAIS ANTIGA desse tipo (pela ordem) e a ligação fica na folha
+// Fases: "USO" na estrutura (Job = caixa) e "LIG" + "sold" na caixa (Job = estrutura). O Rastreio segue esta ligação.
+function usaEstruturas(fl){ return !!(fl && fl.linha[0]==='sold'); }
+function isEstr(s){ return /^S\d{4}-\d{6}$/i.test(String(s||'').trim()); }
+// a Semi Asa V2 soldada serve aos dois lados → guarda-se sempre como Dir
+function artEstrutura(art){ return String(art||'').replace(/^(Praetor-Semi Asa )Esq( V2)$/i,'$1Dir$2'); }
+function nomeEstrutura(art){ return /Semi Asa/i.test(art||'')?'Estrutura Semi Asa Praetor V2 (serve à Dir e à Esq)':'Estrutura '+(art||''); }
+function novoNumEstr(){ const d=new Date(), p=n=>String(n).padStart(2,'0'); return 'S'+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()); }
+function estruturasDe(art){ const a=artEstrutura(art).trim().toLowerCase(), m=new Map(), vistos=new Set();
+  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const s=String(r.Serie||'').trim().toUpperCase(); if(!isEstr(s) || String(r.Artigo||'').trim().toLowerCase()!==a) return;
+    if(r.ID){ if(vistos.has(r.ID)) return; vistos.add(r.ID); }
+    const x=m.get(s)||{ serie:s, inicio:'', quem:'', sold:'', soldTs:0, quemSold:'', uso:'', usoEm:'', etapas:new Set() };
+    const f=String(r.Fase||''), d=String(r.Data||'');
+    if(f==='ESTR'){ if(!x.inicio||d<x.inicio) x.inicio=d; if(!x.quem) x.quem=String(r.Quem||''); }
+    else if(f==='sold'){ const ts=Number(String(r.ID||'').split('-')[1])||0; if(!x.sold||d<x.sold){ x.sold=d; x.soldTs=ts; x.quemSold=String(r.Quem||''); } }
+    else if(f==='USO'){ x.uso=d; x.usoEm=String(r.Job||''); }
+    else { const e=f.match(/^E(\d+)$/); if(e) x.etapas.add(Number(e[1])); }
+    if(!x.inicio) x.inicio=d; m.set(s,x); });
+  (state.jobs||[]).forEach(j=>(j.series||[]).forEach(s=>{ s=String(s).trim().toUpperCase();   // trabalhos deste aparelho, ainda sem linhas na folha
+    if(isEstr(s) && artEstrutura(j.artigo).trim().toLowerCase()===a && !m.has(s)) m.set(s,{ serie:s, inicio:j.dia||'', quem:(j.workers||[]).map(w=>w.opCurto).join(', '), sold:'', soldTs:0, quemSold:'', uso:'', usoEm:'', etapas:new Set() }); }));
+  return [...m.values()].sort((p,q)=>p.serie.localeCompare(q.serie)); }
+function escolherEstruturaNova(f){ state.draft._estrLiga=false; const meio=estruturasDe(state.draft.artigo).filter(x=>!x.uso && !x.sold);
+  if(meio.length){ state._pcont={ f, serie:null, novaEstr:true, esta:false, outras:meio.map(x=>x.serie) }; render(); return; }
+  escolherCaixaFase(f, novoNumEstr(), true); }
 function caixasDoArtigo(art){ const num=s=>parseInt(String(s).replace(/\D/g,''),10)||0;
   return (state.enc||[]).filter(e=>e.artigo===art).map(e=>Object.assign({e},estadoCaixa(art,e))).sort((a,b)=>num(a.e.serie)-num(b.e.serie)); }
 // caixas que ainda não chegaram à montagem (onde a preparação de material pode acontecer)
 function antesDaMontagem(fl){ const im=fl.linha.findIndex(id=>/^mont/.test(id)); return ['novo'].concat(fl.linha.slice(0,im<0?0:im)); }
 // as caixas que estão numa fase (para a pista)
 function caixasNaFase(fl, id, cx){
+  if(usaEstruturas(fl) && (id==='sold'||id==='arm1')){   // 19-10: as estruturas (S…) também aparecem na pista
+    const es=estruturasDe(state.draft&&state.draft.artigo).filter(x=>!x.uso && (id==='sold'?!x.sold:!!x.sold)).map(x=>({ e:{serie:x.serie}, fase:id, decorrer:id==='sold', estr:x }));
+    return es.concat(cx.filter(c=>c.fase===id)); }
   if(fl.prep && id===fl.prep) return cx.filter(c=>c.matDecorrer);
   if(fl.prep && id===fl.prepPara && !fl.linha.includes(id)){ const a=antesDaMontagem(fl); return cx.filter(c=>c.mat && a.includes(c.fase)); }
   return cx.filter(c=>c.fase===id); }
@@ -1019,6 +1069,20 @@ function candidatas(fl, fase, cx){
   const L=fl.linha, nome=id=>FASE_DEF[id].nome.toLowerCase(), mais=(c,n)=>Object.assign({},c,{nota:n});
   const quando=c=>c.ult&&c.ult.dia?' a '+c.ult.dia.slice(8,10)+'/'+c.ult.dia.slice(5,7)+(c.ult.quem?' ('+c.ult.quem+')':''):'';
   const pronto=c=>fl.prep&&c.mat?' · material pronto':'';
+  if(usaEstruturas(fl)){ const L0=fl.linha, iA=L0.indexOf('arm1'), dm=d=>d?d.slice(8,10)+'/'+d.slice(5,7):'';
+    const es=estruturasDe(state.draft&&state.draft.artigo).filter(x=>!x.uso);
+    if(fase==='sold'){   // 19-10: na soldadura escolhe-se a ESTRUTURA (a meio, ou nova), não a caixa
+      const meio=es.filter(x=>!x.sold).map(x=>({ e:{serie:x.serie}, fase:'sold', decorrer:true, estr:x,
+        nota:'continuar — estrutura a meio desde '+dm(x.inicio)+(x.quem?' ('+x.quem+')':'')+(x.etapas.size?' · etapas feitas: '+[...x.etapas].sort((a,b)=>a-b).join(', '):'') }));
+      const velhas=cx.filter(c=>c.fase==='sold'&&c.decorrer).map(c=>mais(c,'continuar — soldadura a decorrer'+quando(c)));
+      return meio.concat(velhas,[{ e:{serie:'🆕 Nova estrutura'}, novaEstr:true, nota:'o quiosque dá o número — não é preciso escrever nada na peça' }]); }
+    if(iA>=0 && fase===L0[iA+1]){   // a montagem: as caixas novas só aparecem se houver estruturas soldadas
+      const prontas=es.filter(x=>x.sold).sort((p,q)=>(p.soldTs||0)-(q.soldTs||0));
+      const cont=cx.filter(c=>c.fase===fase&&c.decorrer).map(c=>mais(c,'continuar — '+nome(fase)+' a decorrer'+quando(c)));
+      const espera=cx.filter(c=>c.fase===fase&&!c.decorrer).map(c=>mais(c,'pronta para '+nome(fase)));
+      const velhas=cx.filter(c=>c.fase==='arm1').map(c=>mais(c,'em '+nome('arm1')));
+      const novas=prontas.length?cx.filter(c=>c.fase==='novo').slice(0,Math.min(prontas.length,3)).map(c=>Object.assign(mais(c,'nova — leva a estrutura soldada mais antiga ('+prontas[0].serie+', soldada a '+dm(prontas[0].sold)+(prontas[0].quemSold?' por '+prontas[0].quemSold:'')+') · há '+prontas.length+' no armazém'),{ estrLiga:true })):[];
+      return cont.concat(espera,velhas,novas); } }
   if(fl.prep && fase===fl.prep){ const a=antesDaMontagem(fl);
     return cx.filter(c=>c.matDecorrer).map(c=>mais(c,'continuar — preparação a decorrer'))
       .concat(cx.filter(c=>!c.mat&&!c.matDecorrer&&a.includes(c.fase)).slice(0,3).map(c=>mais(c,c.fase==='novo'?(L.includes('sold')?'ainda por soldar':'ainda por começar'):'estrutura '+(c.fase==='arm1'?'soldada':'em soldadura')))); }
@@ -1038,16 +1102,19 @@ function renderPercurso(w){
     const l=el('div',{class:'list'}); pe.ops.forEach(o=>l.append(el('button',{class:'item',onclick:()=>{ state._pescolha=null; state.draft.operacao=o.operacao; state.draft.unidade=o.unidade; state.draft.modo='Encomenda'; state.draft.sel=[].concat(pe.serie); state.draft._fora=false; state._pfase=null; state._psel=null; startJob(); }},el('span',{class:'t'},el('b',{},o.operacao)),el('span',{class:'chev'},'›'))));
     l.append(el('button',{class:'item',style:'opacity:.8',onclick:()=>{ state._pescolha=null; render(); }},el('span',{class:'t'},el('b',{},'‹ Voltar ao percurso')))); w.append(l); return; }
   if(state._pcont){ const pc=state._pcont, ops=operacoesDoArtigo(art).filter(o=>pc.f.op.test(o.operacao));
-    const info=s=>{ const c=cx.find(x=>x.e.serie===s), et=new Set(); ops.forEach(o=>etapasFeitas(art,s,o.operacao).forEach(n=>et.add(n)));
-      const u=c&&c.ult&&c.ult.dia?' · último trabalho a '+c.ult.dia.slice(8,10)+'/'+c.ult.dia.slice(5,7)+(c.ult.quem?' ('+c.ult.quem+')':''):'';
+    const info=s=>{ const c=cx.find(x=>x.e.serie===s), et=new Set(), aE=isEstr(s)?artEstrutura(art):art; ops.forEach(o=>etapasFeitas(aE,s,o.operacao).forEach(n=>et.add(n)));
+      const xe=isEstr(s)?estruturasDe(art).find(y=>y.serie===s):null;
+      const u=c&&c.ult&&c.ult.dia?' · último trabalho a '+c.ult.dia.slice(8,10)+'/'+c.ult.dia.slice(5,7)+(c.ult.quem?' ('+c.ult.quem+')':''):xe&&xe.inicio?' · começada a '+xe.inicio.slice(8,10)+'/'+xe.inicio.slice(5,7)+(xe.quem?' ('+xe.quem+')':''):'';
       return (et.size?'etapas já feitas: '+[...et].sort((a,b)=>a-b).join(', '):'já tem trabalho começado')+u; };
-    const vai=(s,nota)=>{ state._pcont=null; state.draft._notaCont=nota||null; escolherCaixaFase(pc.f,s,true); };
-    w.append(el('p',{class:'lbl',style:'font-size:20px'},'A caixa '+pc.serie+' é uma caixa nova ou a continuação de um trabalho anterior?'));
+    const vai=(s,nota)=>{ state._pcont=null; state.draft._notaCont=nota||null; if(s!==pc.serie) state.draft._estrLiga=false; escolherCaixaFase(pc.f,s,true); };
+    w.append(el('p',{class:'lbl',style:'font-size:20px'},pc.novaEstr?'Vais soldar uma estrutura NOVA ou continuar uma que está a meio?':'A caixa '+pc.serie+' é uma caixa nova ou a continuação de um trabalho anterior?'));
     const g=el('div',{class:'pc-cands'});
     const bt=(tit,sub,fn,run)=>{ const b=el('button',{class:'pc-cx'+(run?' run':''),onclick:fn}); b.append(imgFase(fl,pc.f.id,art), el('b',{},tit), el('small',{},sub)); g.append(b); };
-    if(pc.esta) bt('🔁 Continuação — continuo a '+pc.serie, info(pc.serie), ()=>vai(pc.serie), true);
+    if(pc.novaEstr) bt('🆕 Estrutura NOVA — começo do zero', 'o quiosque dá-lhe o número', ()=>vai(novoNumEstr()));
+    else if(pc.esta) bt('🔁 Continuação — continuo a '+pc.serie, info(pc.serie), ()=>vai(pc.serie), true);
     else bt('🆕 Caixa NOVA — começo do zero', 'a '+pc.serie+' ainda não tem trabalho nesta fase', ()=>vai(pc.serie));
-    pc.outras.forEach(s=>bt('🔁 É a continuação da '+s, info(s)+(pc.esta?'':' — fica na '+s+' e a Sónia confirma o número'),
+    if(pc.novaEstr) pc.outras.forEach(s=>bt('🔁 Continuo a estrutura '+s, info(s), ()=>vai(s), true));
+    else pc.outras.forEach(s=>bt('🔁 É a continuação da '+s, info(s)+(pc.esta?'':' — fica na '+s+' e a Sónia confirma o número'),
       ()=>vai(s, pc.esta?null:'[continuação da '+s+': escolheu primeiro a '+pc.serie+' — confirmar o número impresso na caixa]'), true));
     w.append(g);
     w.append(el('button',{class:'big ghost',style:'margin-top:12px',onclick:()=>{ state._pcont=null; render(); }},'‹ Voltar ao percurso'));
@@ -1072,7 +1139,7 @@ function renderPercurso(w){
   const f=P.find(x=>x.id===state._pfase && minhaFase(x)); if(!f){ w.append(el('div',{class:'empty',style:'margin-top:14px'},'Nenhuma fase deste percurso é da área '+(state.areaNome||'escolhida')+'.')); return; }
   const cand=candidatas(fl,f.id,cx);
   const kSel=art+'|'+f.id; if(!state._psel||state._psel.k!==kSel) state._psel={k:kSel,s:[]}; const sel=state._psel.s;
-  w.append(el('p',{class:'lbl',style:'margin-top:14px'},f.ic+' '+f.nome+(fl.quant?'':fl.varias?' — toca nas caixas que vais fazer agora (podes escolher várias)':' — escolhe UMA caixa')));
+  w.append(el('p',{class:'lbl',style:'margin-top:14px'},f.ic+' '+f.nome+(usaEstruturas(fl)&&f.id==='sold'?' — escolhe a ESTRUTURA (nova, ou uma a meio)':fl.quant?'':fl.varias?' — toca nas caixas que vais fazer agora (podes escolher várias)':' — escolhe UMA caixa')));
   // caixas Praetor: pergunta-se QUANTAS caixas e escolhem-se sozinhas (primeiro as que estão a meio, depois as seguintes)
   if(fl.quant){ if(!state._pqtd||state._pqtd.k!==kSel) state._pqtd={k:kSel,n:1}; const N=state._pqtd.n;
     const esc=[]; let tot=0; for(const c of cand){ if(tot>=N) break; esc.push(c.e.serie); tot+=caixasDaSerie(c.e.serie)||1; }
@@ -1090,7 +1157,7 @@ function renderPercurso(w){
     return; }
   const grid=el('div',{class:'pc-cands'+(fl.varias?' mini':'')});
   if(!cand.length) grid.append(el('div',{class:'empty'},'Não há caixas para esta fase neste momento.'));
-  cand.forEach(c=>{ const marc=sel.includes(c.e.serie); const b=el('button',{class:'pc-cx'+(c.decorrer?' run':'')+(marc?' marc':''),onclick:()=>{ if(!fl.varias) return escolherCaixaFase(f,c.e.serie); const i=sel.indexOf(c.e.serie); if(i>=0) sel.splice(i,1); else sel.push(c.e.serie); render(); }});
+  cand.forEach(c=>{ const marc=sel.includes(c.e.serie); const b=el('button',{class:'pc-cx'+(c.decorrer?' run':'')+(marc?' marc':''),onclick:()=>{ if(c.novaEstr) return escolherEstruturaNova(f); state.draft._estrLiga=!!c.estrLiga; if(!fl.varias) return escolherCaixaFase(f,c.e.serie); const i=sel.indexOf(c.e.serie); if(i>=0) sel.splice(i,1); else sel.push(c.e.serie); render(); }});
     if(!fl.varias) b.append(imgFase(fl,f.id)); b.append(el('b',{},(marc?'✅ ':'')+c.e.serie), el('small',{},c.nota||'')); grid.append(b); });   // 15-10: nas fracs só o número (ela: assim está bom)
   w.append(grid);
   if(fl.varias) w.append(el('button',{class:'big ok',style:'margin-top:12px;position:sticky;bottom:10px;z-index:4;box-shadow:0 -6px 18px rgba(0,0,0,.5)'+(sel.length?'':';opacity:.6'),onclick:()=>{ if(!sel.length){ toast('Toca primeiro nas caixas que vais fazer','warn'); return; } escolherCaixaFase(f,sel.slice()); }},sel.length?('▶  Começar com '+sel.length+(sel.length===1?' caixa':' caixas')+' ('+sel.join(', ')+')'):'▶  Escolhe as caixas'));
@@ -1101,7 +1168,7 @@ function renderPercurso(w){
 // Pergunta-se quando a caixa escolhida já está a meio nesta fase, ou quando há OUTRA caixa do mesmo tipo a meio.
 function escolherCaixaFase(f, serie, ok){
   if(!ok) state.draft._notaCont=null;
-  if(!ok && typeof serie==='string'){ const cx=caixasDoArtigo(state.draft.artigo), aMeio=c=>c.fase===f.id && c.decorrer;
+  if(!ok && typeof serie==='string' && !isEstr(serie)){ const cx=caixasDoArtigo(state.draft.artigo), aMeio=c=>c.fase===f.id && c.decorrer;
     const esta=cx.find(c=>c.e.serie===serie), outras=cx.filter(c=>aMeio(c) && c.e.serie!==serie).map(c=>c.e.serie);
     if((esta && aMeio(esta)) || outras.length){ state._pcont={ f, serie, esta:!!(esta && aMeio(esta)), outras }; render(); return; } }
   const ops=operacoesDoArtigo(state.draft.artigo).filter(o=>f.op.test(o.operacao) && (!state.area||state.area.includes(o.unidade)));
@@ -1152,7 +1219,7 @@ function renderFimFase(w,j,f){
   if(!state._fimPasso||state._fimPasso.j!==j.id) state._fimPasso={j:j.id,p:1};
   const P=state._fimPasso, passo=t=>el('div',{class:'chip',style:'margin-bottom:8px'},t);
   if(P.p===1){
-    w.append(passo('Passo 1 de 2 · caixa '+(j.series||[]).join(', ')));
+    w.append(passo('Passo 1 de 2 · '+(isEstr(serie)?'estrutura ':'caixa ')+(j.series||[]).join(', ')));
     const B=blocoEtapas(w,j);
     w.append(el('button',{class:'big ok',style:'margin-top:4px',onclick:()=>{ if(!B.sel.length && !B.usos().length && !confirm('Não marcaste nenhuma etapa.\n\nNão acabaste nenhuma etapa neste turno?')) return; P.p=2; render(); }},'Seguinte ➜'));
     return; }
@@ -1166,26 +1233,27 @@ function renderFimFase(w,j,f){
   const sair=()=>{ const w0=meuW(); gravarEtapas(); limpar(); state.jobPhase='menu'; if(w0) leaveWorker(j,w0); else render(); };
   const pronta=(registar)=>{ gravarEtapas(); if(registar) registarFase(j,f.id); limpar(); state._qty=(j.series||[]).length||1; finishJob(j); };
   const voltar=el('button',{class:'big ghost',style:'margin-top:10px',onclick:()=>{ P.p=1; render(); }},'⬅ Voltar às etapas');
-  w.append(passo('Passo 2 de 2 · caixa '+(j.series||[]).join(', ')));
+  w.append(passo('Passo 2 de 2 · '+(isEstr(serie)?'estrutura ':'caixa ')+(j.series||[]).join(', ')));
+  const oQue=isEstr(serie)?'estrutura':'caixa';
   const nomes=l=>l.map(n=>{ const e=B.et.find(x=>Number(x.n)===n); return n+'. '+(e?e.nome:''); });
   w.append(el('div',{class:'flag',style:'border-color:#34d399;color:#d1fae5;margin-bottom:10px'},
     agora.size?('Marcaste: '+nomes([...agora].sort((a,b)=>a-b)).join(' · ')):'Não marcaste nenhuma etapa neste turno.'));
   if(jaPronta){
-    w.append(el('p',{class:'lbl'},'✅ Esta caixa já foi dada como pronta por um colega.'));
+    w.append(el('p',{class:'lbl'},'✅ Esta '+oQue+' já foi dada como pronta por um colega.'));
     w.append(el('button',{class:'big ok',onclick:()=>pronta(false)},'✅ Registar o meu tempo e sair'));
     w.append(voltar); return; }
   if(faltam.length){
-    w.append(el('p',{class:'lbl'},'Ainda faltam '+faltam.length+' etapa(s) nesta caixa:'));
+    w.append(el('p',{class:'lbl'},'Ainda faltam '+faltam.length+' etapa(s) nesta '+oQue+':'));
     const l=el('div',{class:'list',style:'margin-bottom:10px'}); faltam.forEach(e=>l.append(el('div',{class:'item',style:'opacity:.8'},el('span',{class:'t'},el('b',{},'⬜ '+e.n+'. '+e.nome))))); w.append(l);
-    w.append(el('p',{class:'muted',style:'font-size:13px'},'A caixa fica na '+f.nome+' para o próximo turno. Se afinal acabaste alguma destas, volta atrás e marca-a.'));
+    w.append(el('p',{class:'muted',style:'font-size:13px'},'A '+oQue+' fica na '+f.nome+' para o próximo turno. Se afinal acabaste alguma destas, volta atrás e marca-a.'));
     w.append(el('button',{class:'big ok',onclick:sair},'✅ Confirmar e sair'));
     w.append(voltar); return; }
   w.append(el('p',{class:'lbl',style:'font-size:20px'},/^mont/.test(f.id)?'Todas as etapas estão feitas. A caixa está pronta para ir para o cliente?':'Todas as etapas estão feitas. A '+f.nome+' está acabada?'));
   const g=el('div',{class:'pc-cands'});
   const sim=el('button',{class:'pc-cx fim-sim',onclick:()=>pronta(true)});
-  sim.append(imgFase(fl,prox?prox.id:f.id,j.artigo), el('b',{},'✅ Sim, está pronta'), el('small',{},prox?('a caixa passa para "'+prox.nome+'"'):'a caixa fica pronta'));
+  sim.append(imgFase(fl,prox?prox.id:f.id,j.artigo), el('b',{},'✅ Sim, está pronta'), el('small',{},prox?('a '+oQue+' passa para "'+prox.nome+'"'):'a '+oQue+' fica pronta'));
   const nao=el('button',{class:'pc-cx',onclick:sair});
-  nao.append(imgFase(fl,f.id,j.artigo), el('b',{},'⏸ Não, ainda não'), el('small',{},'o teu tempo fica registado; a caixa fica nesta fase'));
+  nao.append(imgFase(fl,f.id,j.artigo), el('b',{},'⏸ Não, ainda não'), el('small',{},'o teu tempo fica registado; a '+oQue+' fica nesta fase'));
   g.append(sim,nao); w.append(g); w.append(voltar); }
 function renderFimFaseSimples(w,j,f){
   const fl=fluxoDoArtigo(j.artigo); const prox=proxFase(fl,f.id);
@@ -1848,9 +1916,11 @@ function renderConfCaixa(w){
   w.append(el('p',{class:'lbl'},'Confirma antes de começar'));
   const cx=el('div',{style:'background:var(--card,#122230);border:2px solid #26c9e2;border-radius:18px;padding:18px;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center'});
   if(fl){ const im=imgFase(fl,f?f.id:fl.linha[0],d.artigo); im.style.height='190px'; cx.append(im); } else cx.append(el('div',{style:'font-size:80px'},'📦'));
-  cx.append(el('div',{style:'font-size:15px;color:var(--soft)'},ser.length>1?'Vais trabalhar nestas '+ser.length+' caixas':'Vais trabalhar na caixa'));
+  const ehE=ser.length>0 && ser.every(isEstr);
+  cx.append(el('div',{style:'font-size:15px;color:var(--soft)'},ehE?'Vais soldar a estrutura':ser.length>1?'Vais trabalhar nestas '+ser.length+' caixas':'Vais trabalhar na caixa'));
   cx.append(el('div',{style:'font-size:44px;font-weight:800;font-family:var(--mono);letter-spacing:.02em'},ser.length?ser.join('  ·  '):'(sem número)'));
-  cx.append(el('div',{style:'font-size:22px;font-weight:700'},d.artigo||''));
+  cx.append(el('div',{style:'font-size:22px;font-weight:700'},ehE?nomeEstrutura(d.artigo):(d.artigo||'')));
+  if(d._estrLiga && !ehE) cx.append(el('div',{style:'font-size:15px;color:#f5d27a'},'🏗️ leva a estrutura soldada mais antiga do armazém'));
   cx.append(el('div',{style:'font-size:17px;color:#26c9e2'},(f?f.ic+' ':'')+(d.operacao||'')));
   w.append(cx);
   const g=el('div',{style:'display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px'});
@@ -1906,7 +1976,7 @@ function startJobConfirmado(){
   // 14-10-2026 - a Sónia: "a soldadura está a escolher mal os números… só está 1 Lower Dir em curso" (a mesma soldadura ficou em
   // EM2623, EM2624 e EM2626). Na SOLDADURA: se a caixa escolhida ainda não tem trabalho e já há OUTRA caixa do mesmo artigo com a
   // soldadura começada e sem montagem/embalamento, pergunta-se se é a mesma. Só pergunta — se for mesmo outra caixa, segue.
-  if(/soldadura/i.test(d.operacao||'')){
+  if(/soldadura/i.test(d.operacao||'') && !series.every(isEstr)){
     const novas=series.filter(s=>!historicoDaSerie(d.artigo,s).length);
     if(novas.length){
       const outras=(state.enc||[]).filter(e=>e.artigo===d.artigo && !series.includes(String(e.serie))).map(e=>({s:String(e.serie),h:historicoDaSerie(d.artigo,e.serie)}))
@@ -1919,6 +1989,12 @@ function startJobConfirmado(){
       }
     }
   }
+  // 19-10: estrutura soldada (S…) — guarda-se no artigo da estrutura; a caixa nova da montagem leva a mais antiga do armazém
+  const ehEstr=series.length>0 && series.every(isEstr), artJob=ehEstr?artEstrutura(d.artigo):d.artigo;
+  let liga=null;
+  if(d._estrLiga && !ehEstr && series.length===1){ const pr=estruturasDe(d.artigo).filter(x=>!x.uso && x.sold).sort((p,q)=>(p.soldTs||0)-(q.soldTs||0));
+    if(!pr.length){ d._estrLiga=false; alert('Já não há estruturas soldadas deste tipo no armazém.\n\nVolta atrás e escolhe outra caixa.'); state.view='percurso'; render(); return; }
+    liga=pr[0]; }
   const sig=d.operacao+'|'+series.slice().sort().join(',');
   const existing=state.jobs.find(j=>j.status!=='done' && (j.operacao+'|'+(j.series||[]).slice().sort().join(','))===sig);
   if(!podeComecarOutro(state.op, existing)) return;
@@ -1927,10 +2003,19 @@ function startJobConfirmado(){
     if(existing.workers.some(x=>x.pin===state.op.pin && !x.endTs)){ toast('Já estás neste trabalho','err'); state.view='board'; render(); return; }
     existing.workers.push(worker); save(); pushTrabAberto(existing,'aberto'); toast('Juntaste-te à equipa ('+jobWorkersAtivos(existing).length+' operadores)','ok'); state.view='board'; render(); return;
   }
-  const j={ id:'J'+Date.now(), artigo:d.artigo, programa:d.programa, operacao:d.operacao, unidade:d.unidade,
-    modo:d.modo, series, plano:(planoDoArtigo(d.artigo)||{}).codigo||'', dia:dstr(nowTs()), status:'open', workers:[worker] };
+  const j={ id:'J'+Date.now(), artigo:artJob, programa:d.programa, operacao:d.operacao, unidade:d.unidade,
+    modo:d.modo, series, plano:(planoDoArtigo(artJob)||{}).codigo||'', dia:dstr(nowTs()), status:'open', workers:[worker] };
   if(foraLista.length){ j.foraLista=foraLista.slice(); j.comentario='[série fora da lista: '+foraLista.join(' ')+' — confirmar]'; }
   if(d._notaCont){ j.comentario=(j.comentario?j.comentario+' ':'')+d._notaCont; d._notaCont=null; }   // 19-10: continuação de outra caixa
+  if(ehEstr && !estruturasDe(artJob).some(x=>x.serie===String(series[0]).toUpperCase())){ const a=lerFases();   // estrutura nova: fica a constar para todos os aparelhos
+    a.push({ ID:'EN-'+nowTs()+'-'+series[0], Data:dstr(nowTs()), Artigo:artJob, Serie:series[0], Fase:'ESTR', Operacao:j.operacao, Quem:worker.opCurto, Dispositivo:deviceName(), DataHoraRegisto:new Date().toLocaleString('pt-PT'), Job:j.id });
+    gravarFases(a); syncFases(); }
+  if(liga){ const a=lerFases(), t=nowTs(), dh=new Date().toLocaleString('pt-PT'), s=series[0];
+    a.push({ ID:'EU-'+t+'-'+liga.serie, Data:dstr(t), Artigo:artEstrutura(d.artigo), Serie:liga.serie, Fase:'USO', Operacao:'estrutura usada na '+s, Quem:worker.opCurto, Dispositivo:deviceName(), DataHoraRegisto:dh, Job:s });
+    a.push({ ID:'EL-'+t+'-'+s, Data:dstr(t), Artigo:d.artigo, Serie:s, Fase:'LIG', Operacao:'estrutura soldada '+liga.serie, Quem:worker.opCurto, Dispositivo:deviceName(), DataHoraRegisto:dh, Job:liga.serie });
+    a.push({ ID:'FS-'+t+'-'+s, Data:dstr(t), Artigo:d.artigo, Serie:s, Fase:'sold', Operacao:'(estrutura '+liga.serie+')', Quem:'ESTRUTURA', Dispositivo:deviceName(), DataHoraRegisto:dh });
+    gravarFases(a); syncFases(); j.estrutura=liga.serie; j.comentario=(j.comentario?j.comentario+' ':'')+'[estrutura '+liga.serie+']'; }
+  d._estrLiga=false;
   state.jobs.push(j); save(); pushTrabAberto(j,'aberto'); toast('Trabalho iniciado','ok'); state.view='board'; render();
 }
 
