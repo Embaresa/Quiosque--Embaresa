@@ -508,8 +508,21 @@ function render(){
   if(_foco){ const n=document.getElementById(_foco.id); if(n && n!==document.activeElement){ try{ n.focus({preventScroll:true}); if(_foco.s!=null) n.setSelectionRange(_foco.s,_foco.e); }catch(e){} } }
   if(_cj && _cj.transp && _cj.transp.fase==='rececao') setTimeout(()=>trMontarAssinaturas(_cj),0);
 }
+// 20-10-2026: ela — "põe um botão para eu sincronizar". O Tablet Soldadura ficou de 19/10 09:40 a 20/10 sem rede, com 7 registos
+// presos e sem se perceber porquê. Tocar no "por sincronizar" envia já as filas e diz o que se passa (sem internet / recusados).
+async function sincronizarAgora(){ if(state._sincA) return; state._sincA=true;
+  const antes=loadQueue().length+loadPertQ().length; toast('A enviar…','ok');
+  let net=navigator.onLine!==false;
+  if(net){ try{ const c=new AbortController(); const tm=setTimeout(()=>c.abort(),8000); await fetch('https://www.gstatic.com/generate_204',{mode:'no-cors',cache:'no-store',signal:c.signal}); clearTimeout(tm); }catch(e){ net=false; } }
+  try{ await syncQueue(); await syncPertQueue(); if(typeof syncStockQ==='function') await syncStockQ(); if(typeof syncContQ==='function') await syncContQ(); if(typeof syncFases==='function') syncFases(); }catch(e){}
+  state._sincA=false; const q=loadQueue(), resto=q.length+loadPertQ().length;
+  if(!resto) toast(antes?('Tudo enviado ✅ ('+antes+')'):'Já estava tudo enviado ✅','ok');
+  else if(!net) toast('Sem internet neste aparelho — vê o Wi-Fi. Os '+resto+' registos continuam guardados aqui (NÃO apagues os dados do navegador).','err');
+  else { toast('Ainda falta(m) '+resto+' — o envio foi recusado. Tenta outra vez daqui a 1 minuto; se continuar, avisa a Sónia.','warn');
+    alert('Ainda por enviar ('+resto+'):\n\n'+q.slice(0,12).map(r=>'• '+String(r.Data||'')+' '+String(r.HoraInicio||'')+'–'+String(r.HoraFim||'')+' · '+String(r.Colaborador||'')+' · '+String(r.Artigo||'')+' '+String(r.NumSerie||'')).join('\n')+(q.length>12?'\n…':'')+'\n\nTira uma fotografia a isto e manda à Sónia.'); }
+  render(); }
 function topbar(){
-  const q=loadQueue().length;
+  const q=loadQueue().length+loadPertQ().length;
   return el('div',{class:'topbar'},
     el('div',{class:'area', style:'user-select:none',   // toque LONGO (~1,5s) = acesso do supervisor (escondido dos operadores)
       onpointerdown:()=>{ clearTimeout(window.__supLP); window.__supLP=setTimeout(()=>{ state.intent='fecharAntigos'; state.op=null; state.pinbuf=''; state.view='pin'; render(); }, 1500); },
@@ -519,7 +532,7 @@ function topbar(){
     }, el('span',{class:'pip'}), 'PRODUÇÃO'),
     el('div',{class:'right'},
       el('div',{}, el('div',{class:'clock',id:'clk'}, hhmm(nowTs())), el('div',{class:'sub'}, dstr(nowTs()))),
-      el('div',{class:'sync '+(q?'off':'on')}, el('span',{class:'d'}), q?('por sincronizar ('+q+')'):'sincronizado')
+      el('button',{class:'sync '+(q?'off':'on'),style:'border:none;background:transparent;font:inherit;cursor:pointer;padding:6px 8px',title:'Tocar para enviar agora',onclick:sincronizarAgora}, el('span',{class:'d'}), q?('por sincronizar ('+q+') · 🔄 tocar para enviar'):'sincronizado 🔄')
     ));
 }
 
