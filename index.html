@@ -69,6 +69,7 @@
   .plano .pt{display:block;width:100%;text-align:left;background:#11261c;border:1px solid #23503b;border-radius:14px;padding:12px 14px;margin-bottom:8px;color:var(--txt);cursor:pointer;font:inherit}
   .plano .pt b{display:block;font-size:20px;font-family:var(--mono)} .plano .pt span{display:block;font-size:14px} .plano .pt small{display:block;color:var(--soft);font-size:12.5px;margin-top:2px}
   .plano .pt.ok{opacity:.5} .plano .pt .es{float:right;font-size:20px}
+  .plano .pt.esp{background:#2a2410;border-color:#6b5a1e;opacity:.75} .plano .pturno.esp{background:#3b2f0b;color:#f5d27a}
   .plano .pturno{margin:10px 0 6px;padding:4px 10px;border-radius:8px;background:#162b20;color:#9fd5b8;font-size:13px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
   .plano .pturno.agora{background:#34d399;color:#05261a}
   @media(max-width:900px){ .boardsplit{grid-template-columns:1fr} .plano{border-right:0;border-bottom:2px solid #1f4a37;max-height:45vh} }
@@ -1105,11 +1106,17 @@ function estadoCaixa(artigo, e){
 function usaEstruturas(fl){ return !!(fl && fl.linha[0]==='sold'); }
 function isEstr(s){ return /^S\d{4}-\d{6}$/i.test(String(s||'').trim()); }
 // a Semi Asa V2 soldada serve aos dois lados → guarda-se sempre como Dir
-function artEstrutura(art){ return String(art||'').replace(/^(Praetor-Semi Asa )Esq( V2)$/i,'$1Dir$2'); }
-function nomeEstrutura(art){ return /Semi Asa/i.test(art||'')?'Estrutura Semi Asa Praetor V2 (serve à Dir e à Esq)':'Estrutura '+(art||''); }
+// 21-10: ela — "as estruturas KC dão para todos" → no KC 390 a estrutura soldada é a mesma para Upper/Lower Esq/Dir: guarda-se num
+// grupo só (V1 com V1, V2 com V2), como a Semi Asa (Esq e Dir).
+function artEstrutura(art){ const a=String(art||'').trim();
+  if(/^Praetor-Semi Asa (Esq|Dir) V2$/i.test(a)) return 'Praetor-Semi Asa Dir V2';
+  if(/^KC 390-(Upper|Lower) (Esq|Dir)$/i.test(a)) return 'KC 390-Lower Dir';
+  if(/^KC 390-(Upper|Lower) (Esq|Dir) V2$/i.test(a)) return 'KC 390-Lower Dir V2';
+  return a; }
+function nomeEstrutura(art){ return /Semi Asa/i.test(art||'')?'Estrutura Semi Asa Praetor V2 (serve à Dir e à Esq)':/^KC 390-(Upper|Lower) (Esq|Dir) V2$/i.test(art||'')?'Estrutura KC 390 V2 (serve às 4: Upper/Lower, Esq/Dir)':/^KC 390-(Upper|Lower) (Esq|Dir)$/i.test(art||'')?'Estrutura KC 390 V1 (serve às 4: Upper/Lower, Esq/Dir)':'Estrutura '+(art||''); }
 function novoNumEstr(){ const d=new Date(), p=n=>String(n).padStart(2,'0'); return 'S'+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()); }
 function estruturasDe(art){ const a=artEstrutura(art).trim().toLowerCase(), m=new Map(), vistos=new Set();
-  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const s=String(r.Serie||'').trim().toUpperCase(); if(!isEstr(s) || String(r.Artigo||'').trim().toLowerCase()!==a) return;
+  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const s=String(r.Serie||'').trim().toUpperCase(); if(!isEstr(s) || artEstrutura(r.Artigo).toLowerCase()!==a) return;
     if(r.ID){ if(vistos.has(r.ID)) return; vistos.add(r.ID); }
     const x=m.get(s)||{ serie:s, inicio:'', quem:'', sold:'', soldTs:0, quemSold:'', uso:'', usoEm:'', etapas:new Set() };
     const f=String(r.Fase||''), d=String(r.Data||'');
@@ -1260,6 +1267,20 @@ function etapasFeitas(artigo,serie,op,jobId){ const s=String(serie||'').toUpperC
 function registarEtapas(j, nums){ if(!nums||!nums.length) return; const a=lerFases(); const quem=(j.workers||[]).filter(w=>!w.endTs).map(w=>w.opCurto).filter(Boolean).join(', ');
   (j.series||[]).forEach(s=>nums.forEach(n=>a.push({ ID:'ET-'+nowTs()+'-'+s+'-'+n, Data:dstr(nowTs()), Artigo:j.artigo, Serie:s, Fase:'E'+n, Operacao:j.operacao, Quem:quem, Dispositivo:deviceName(), DataHoraRegisto:new Date().toLocaleString('pt-PT'), Job:j.id })));
   gravarFases(a); syncFases(); }
+// 21-10-2026: ela — "o Pedro concluiu o EV mas não tem alumínio e não pode fazer mais nada; está praticamente pronta mas continua a
+// aparecer e só se termina quando chegar o alumínio". No fim do trabalho, com etapas por fazer: «⏸ Falta material» → linha ESPERA na
+// folha Fases (Job = o material). Quando alguém volta a começar a caixa (ou ela marca no PC «o material chegou») → ESPERA-FIM.
+// Vale a última das duas (pela hora no ID). No plano a caixa passa para «⏸ À espera de material»; o PC mostra-o nas Encomendas,
+// no Planear e controlar e nas Compras.
+const MATERIAIS_ESPERA=[['🔩','Alumínio'],['🧵','Lona'],['🪵','Madeira'],['🔧','Parafusos / ferragens'],['📦','Outro material']];
+function esperaDe(artigo, serie){ const s=String(serie||'').trim().toUpperCase(), a=String(artigo||'').trim().toLowerCase(); if(!s) return null; let u=null;
+  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const f=String(r.Fase||''); if(f!=='ESPERA' && f!=='ESPERA-FIM') return;
+    if(String(r.Serie||'').trim().toUpperCase()!==s || String(r.Artigo||'').trim().toLowerCase()!==a) return;
+    const t=Number(String(r.ID||'').split('-')[1])||0; if(!u || t>u.t) u={t,r}; });
+  return (u && u.r.Fase==='ESPERA')?{ material:String(u.r.Job||'material'), desde:String(u.r.Data||''), op:String(u.r.Operacao||''), quem:String(u.r.Quem||'') }:null; }
+function registarEspera(j, material, fim){ const a=lerFases(), t=nowTs(), quem=(j.workers||[]).map(w=>w.opCurto).filter(Boolean).join(', ');
+  (j.series||[]).forEach(s=>a.push({ ID:(fim?'EF-':'ES-')+t+'-'+s, Data:dstr(t), Artigo:j.artigo, Serie:s, Fase:fim?'ESPERA-FIM':'ESPERA', Operacao:j.operacao, Quem:quem, Dispositivo:deviceName(), DataHoraRegisto:new Date().toLocaleString('pt-PT'), Job:material||'' }));
+  gravarFases(a); syncFases(); }
 function blocoEtapas(w,j){ const et=etapasDe(j.artigo,j.operacao); if(!et) return null;
   const feitas=etapasFeitas(j.artigo,(j.series||[])[0],j.operacao,j.id);
   const doStock=etapasDoStock(j.artigo,(j.series||[])[0],j.operacao), doJob=etapasDoJob(j);
@@ -1317,8 +1338,21 @@ function renderFimFase(w,j,f){
   if(faltam.length){
     w.append(el('p',{class:'lbl'},'Ainda faltam '+faltam.length+' etapa(s) nesta '+oQue+':'));
     const l=el('div',{class:'list',style:'margin-bottom:10px'}); faltam.forEach(e=>l.append(el('div',{class:'item',style:'opacity:.8'},el('span',{class:'t'},el('b',{},'⬜ '+e.n+'. '+e.nome))))); w.append(l);
+    const esp=esperaDe(j.artigo,serie);
+    if(P.esp){   // 21-10: falta material — qual?
+      w.append(el('p',{class:'lbl',style:'font-size:20px'},'⏸ Que material falta para acabar a '+oQue+' '+(j.series||[]).join(', ')+'?'));
+      const g=el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:10px'});
+      MATERIAIS_ESPERA.forEach(([ic,m])=>g.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:4px;padding:16px;border-left:6px solid #eab308',onclick:()=>{
+          const w0=meuW(); gravarEtapas(); registarEspera(j,m); limpar(); toast('⏸ Fica à espera de '+m.toLowerCase(),'ok'); state.jobPhase='menu'; if(w0) leaveWorker(j,w0); else render(); }},
+        el('span',{style:'font-size:30px;line-height:1'},ic), el('b',{style:'font-size:18px'},m))));
+      w.append(g);
+      w.append(el('p',{class:'muted',style:'font-size:13px'},'A '+oQue+' sai do plano de hoje e fica em «⏸ À espera de material». Quando o material chegar, quem a voltar a começar tira-a da espera.'));
+      w.append(el('button',{class:'big ghost',style:'margin-top:10px',onclick:()=>{ P.esp=false; render(); }},'⬅ Voltar'));
+      return; }
     w.append(el('p',{class:'muted',style:'font-size:13px'},'A '+oQue+' fica na '+f.nome+' para o próximo turno. Se afinal acabaste alguma destas, volta atrás e marca-a.'));
+    if(esp) w.append(el('div',{class:'flag',style:'border-color:#eab308;color:#fde68a;margin-bottom:8px'},'⏸ Esta '+oQue+' está à espera de '+esp.material.toLowerCase()+(esp.desde?' desde '+esp.desde.slice(8,10)+'/'+esp.desde.slice(5,7):'')+'.'));
     w.append(el('button',{class:'big ok',onclick:sair},'✅ Confirmar e sair'));
+    w.append(el('button',{class:'big',style:'margin-top:10px;background:#3b2f0b;border:2px solid #eab308;color:#fde68a',onclick:()=>{ P.esp=true; render(); }},'⏸ Não dá para acabar — falta material'));
     w.append(voltar); return; }
   // 21-10-2026: ela — "o problema é que eles quando terminam não dão a caixa como concluída" (EM2433, EM2624: as 4 etapas feitas e
   // a caixa ficou presa na montagem; no turno seguinte o número certo não aparecia e escolhiam outro). Com TODAS as etapas feitas
@@ -1573,7 +1607,8 @@ function tarefasDoQuadro(areaId){ const vt=quadroVeTestes(), q=((state.cfg&&stat
   if(!id) return []; const de=q.filter(t=>t.dia===hoje && t.area===id), vem=[], k=t=>String(t.serie||'').toUpperCase()+'|'+t.operacao;
   q.filter(t=>t.area===id && t.serie && t.dia<hoje && t.dia>=lim).sort((a,b)=>String(b.dia).localeCompare(String(a.dia))).forEach(t=>{
     if(de.some(x=>k(x)===k(t)) || vem.some(x=>k(x)===k(t)) || estadoTarefaQ(t)==='ok') return; vem.push(Object.assign({},t,{_vem:t.dia})); });
-  return (id==='log'?entregasDoQuadro():[]).concat(vem,de); }
+  // 21-10: caixa à espera de material → vai para o grupo «⏸ À espera de material» (t._esp)
+  return (id==='log'?entregasDoQuadro():[]).concat(vem,de).map(t=>{ const e=(!t._entrega && t.serie)?esperaDe(t.artigo,t.serie):null; return e?Object.assign({},t,{_esp:e}):t; }); }
 // 21-10-2026: ela — "os transportes saem automáticos do plano de entregas". Na área Transportes, as caixas com entrega pedida para
 // hoje (e as atrasadas dos últimos 14 dias, ainda não entregues) aparecem sozinhas; tocar → PIN → o transporte abre com elas na carga.
 function entregasDoQuadro(){ const hoje=dstr(nowTs()), lim=dstr(nowTs()-14*864e5), emTr=new Set();
@@ -1602,17 +1637,20 @@ function painelPlano(){ state._quadroPre=null; state._trPre=null; const ver=area
     // 21-10: ela — "quero que fique visível turno 1 e turno 2" → dentro de cada área, por turno (o de agora destacado)
     // 21-10: ela — "as fracs trabalham só 1 turno; só a soldadura, montagem e transportes 2 turnos" → nas áreas de 1 turno não há T1/T2
     const umT=['mont2'].includes(a.id);
-    const grupos=umT?[['vem','↪ Ficou de dias anteriores',l.filter(t=>t._vem)],['','Hoje',l.filter(t=>!t._vem)]]
-      :[['vem','↪ Ficou de dias anteriores',l.filter(t=>t._vem)],['T1','1.º turno',l.filter(t=>!t._vem&&t.turno==='T1')],['T2','2.º turno',l.filter(t=>!t._vem&&t.turno==='T2')],['','Todo o dia',l.filter(t=>!t._vem&&!t.turno)]];
+    const lv=l.filter(t=>!t._esp), esps=l.filter(t=>t._esp);
+    const grupos=(umT?[['vem','↪ Ficou de dias anteriores',lv.filter(t=>t._vem)],['','Hoje',lv.filter(t=>!t._vem)]]
+      :[['vem','↪ Ficou de dias anteriores',lv.filter(t=>t._vem)],['T1','1.º turno',lv.filter(t=>!t._vem&&t.turno==='T1')],['T2','2.º turno',lv.filter(t=>!t._vem&&t.turno==='T2')],['','Todo o dia',lv.filter(t=>!t._vem&&!t.turno)]])
+      .concat([['esp','⏸ À espera de material',esps]]);
     grupos.forEach(([k,nome,g])=>{ if(!g.length) return; const agora=k===tA;
-      p.append(el('div',{class:'pturno'+(agora?' agora':'')},nome+(agora?' · agora':'')));
+      p.append(el('div',{class:'pturno'+(agora?' agora':'')+(k==='esp'?' esp':'')},nome+(agora?' · agora':'')));
     g.forEach(t=>{ const quem=quemNaTarefa(t), e=quem?'run':estadoTarefaQ(t);
-      p.append(el('button',{class:'pt'+(e==='ok'?' ok':''),style:'border-left:6px solid '+a.cor,onclick:()=>{
+      p.append(el('button',{class:'pt'+(e==='ok'?' ok':'')+(t._esp&&!quem?' esp':''),style:'border-left:6px solid '+(t._esp?'#eab308':a.cor),onclick:()=>{
           if(t._entrega){ state.intent='transp'; state._trPre=entregasDoQuadro().filter(x=>!x._emTr); state.op=null; state.pinbuf=''; state.view='pin'; render(); return; }   // 21-10: transporte com as caixas do dia
           state.intent='work'; state._areaPre=a; state._quadroPre=t; state.op=null; state.pinbuf=''; state.view='pin'; render(); }},
         el('span',{class:'es'},e==='ok'?'✅':(quem||e==='run')?'▶':''),
         el('b',{},t.comp?(t.qtd?'🧰 '+t.qtd+(Number(t.qtd)===1?' jogo':' jogos'):'🧰 quantos der'):(t.serie||'🆕 Estrutura nova')), el('span',{},t.artigo),
         el('small',{},(t._vem?'↪ vem de '+t._vem.slice(8,10)+'/'+t._vem.slice(5,7)+' · ':'')+t.operacao),
+        t._esp?el('small',{style:'color:#fde68a;font-weight:800'},'⏸ falta '+t._esp.material.toLowerCase()+(t._esp.desde?' (desde '+t._esp.desde.slice(8,10)+'/'+t._esp.desde.slice(5,7)+')':'')+' — quando chegar, toca para continuar'):null,
         t.nota?el('small',{style:'color:#f5d27a'},'📝 '+t.nota):null,
         quem?el('small',{style:'color:#34d399;font-weight:800;font-size:14px'},'👷 '+quem+' — a trabalhar agora'):null)); }); }); });
   if(!n) p.append(el('div',{class:'empty',style:'margin-top:14px'},'Ainda não há plano para hoje.'));
@@ -1634,6 +1672,13 @@ function iniciarDoQuadro(t){
   state._psel=null; state._pcont=null; state._pescolha=null;
   if(!t.serie){ const f=fl?trabalhoFases(fl).find(x=>x.op.test(t.operacao)):null;   // estrutura nova (soldadura): o percurso dá o código
     if(f){ state._pfase=f.id; state.view='percurso'; render(); return; } state.view='operacao'; render(); return; }
+  // 21-10: ela — "o pessoal das fracções não consegue selecionar 4 caixas ao mesmo tempo" (EM2700–2703 no plano: cada toque abria só
+  // uma) → nas Fracs abre a escolha de caixas com as do plano de hoje (mesmo artigo e operação) já marcadas; podem tirar ou juntar.
+  if(fl && fl.varias){ const f=trabalhoFases(fl).find(x=>x.op.test(t.operacao));
+    if(f){ const cand=new Set(candidatas(fl,f.id,caixasDoArtigo(art)).map(c=>c.e.serie));
+      const s=[t.serie].concat(tarefasDoQuadro(t.area).filter(x=>!x.comp && !x._entrega && x.serie && x.artigo===art && x.operacao===t.operacao && estadoTarefaQ(x)!=='ok').map(x=>x.serie))
+        .filter((v,i,a)=>a.indexOf(v)===i && cand.has(v));
+      if(s.length){ state._pfase=f.id; state._psel={k:art+'|'+f.id, s}; state.view='percurso'; render(); window.scrollTo(0,0); toast(s.length>1?s.length+' caixas do plano já marcadas — confirma em baixo':'Toca nas caixas que vais fazer','ok'); return; } } }
   if(fl && usaEstruturas(fl)){ const c=caixasDoArtigo(art).find(x=>x.e.serie===t.serie); state.draft._estrLiga=!!(c && c.fase==='novo' && !/soldadura/i.test(t.operacao)); }
   state.draft.sel=[t.serie]; state._pfase=null; startJob(); }
 // o quadro muda durante o dia: relê-se de 5 em 5 minutos (só o quadro)
@@ -2269,6 +2314,8 @@ function startJobConfirmado(){
     if(fl0) series.forEach(s=>{ const f0=faseDaOperacao(fl0,d.artigo,s,d.operacao); if(!f0) return; const iF=fl0.linha.indexOf(f0.id), conc=fasesConcluidas(d.artigo,s), h=historicoDaSerie(d.artigo,s);
       fl0.linha.slice(0,Math.max(0,iF)).forEach(id=>{ const fd=FASE_DEF[id]; if(fd && fd.op && !conc.has(id) && h.some(x=>fd.op.test(x.op||'')))
         registarFase({ artigo:d.artigo, series:[s], operacao:'(concluída ao começar '+f0.nome+')', workers:[{opCurto:'AUTO'}] }, id); }); }); }
+  // 21-10: voltar a começar uma caixa que estava à espera de material = o material chegou
+  if(!ehEstr) series.forEach(s=>{ const e=esperaDe(d.artigo,s); if(e) registarEspera({ artigo:d.artigo, series:[s], operacao:d.operacao, workers:[{opCurto:curto(state.op.nome)}] }, e.material, true); });
   const nP=fecharParagemAoComecar(state.op, existing);
   const worker={ op:state.op.nome, opCurto:curto(state.op.nome), pin:state.op.pin, startTs:nowTs(), pauses:[], status:'running', endTs:null };
   if(existing){
