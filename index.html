@@ -605,7 +605,7 @@ function outrosVisiveis(){ return verTudo() ? (state._outros||[]) : []; }
 function outrosAbertos(rows){ const eu=deviceName(), hoje=dstr(nowTs()), g={};
   (rows||[]).forEach(x=>{ const id=String(x.ID||''); if(!id) return; if(!g[id]) g[id]={prim:x, ult:x, fechado:false};
     if(/^sair:/.test(String(x.Estado||''))) return; g[id].ult=x; if(/^fechad|^fechar/.test(String(x.Estado||''))) g[id].fechado=true; });
-  return Object.values(g).filter(o=>!o.fechado && String(o.ult.Dispositivo||'')!==eu && trabDataISO(o.ult.Data)===hoje)
+  return Object.values(g).filter(o=>!o.fechado && !/^parado/.test(String(o.ult.Estado||'')) && String(o.ult.Dispositivo||'')!==eu && trabDataISO(o.ult.Data)===hoje)
     .map(o=>({ disp:o.ult.Dispositivo||'?', artigo:o.ult.Artigo||'', op:o.ult.Operacao||'', series:o.ult.Series||'', quem:o.ult.Operadores||'—',
       inicio:trabTs(o.prim.DataHoraRegisto)||nowTs() }))
     .sort((a,b)=>String(a.disp).localeCompare(String(b.disp))||a.inicio-b.inicio); }
@@ -1351,8 +1351,15 @@ function renderFimFase(w,j,f){
       return; }
     w.append(el('p',{class:'muted',style:'font-size:13px'},'A '+oQue+' fica na '+f.nome+' para o próximo turno. Se afinal acabaste alguma destas, volta atrás e marca-a.'));
     if(esp) w.append(el('div',{class:'flag',style:'border-color:#eab308;color:#fde68a;margin-bottom:8px'},'⏸ Esta '+oQue+' está à espera de '+esp.material.toLowerCase()+(esp.desde?' desde '+esp.desde.slice(8,10)+'/'+esp.desde.slice(5,7):'')+'.'));
-    w.append(el('button',{class:'big ok',onclick:sair},'✅ Confirmar e sair'));
-    w.append(el('button',{class:'big',style:'margin-top:10px;background:#3b2f0b;border:2px solid #eab308;color:#fde68a',onclick:()=>{ P.esp=true; render(); }},'⏸ Não dá para acabar — falta material'));
+    // 21-10: ela — "eles vão fazer outro EV e vai ser a mesma coisa: como é que o quiosque sabe que fica parado por falta de
+    // material?" → já não é um botão a mais que se pode saltar: com etapas por fazer, PERGUNTA-SE porquê (turno ou material).
+    w.append(el('p',{class:'lbl',style:'font-size:20px;margin-top:6px'},'Porque é que a '+oQue+' não ficou acabada?'));
+    const gq=el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px'});
+    gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #34d399',onclick:sair},
+      el('span',{style:'font-size:34px;line-height:1'},'🕔'), el('b',{style:'font-size:19px'},'Acabou o meu turno'), el('small',{style:'color:var(--soft)'},'há material — o próximo turno continua')));
+    gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #eab308;background:#2a2410',onclick:()=>{ P.esp=true; render(); }},
+      el('span',{style:'font-size:34px;line-height:1'},'⏸'), el('b',{style:'font-size:19px;color:#fde68a'},'Falta material'), el('small',{style:'color:var(--soft)'},'não dá para continuar até chegar (alumínio, lona…)')));
+    w.append(gq);
     w.append(voltar); return; }
   // 21-10-2026: ela — "o problema é que eles quando terminam não dão a caixa como concluída" (EM2433, EM2624: as 4 etapas feitas e
   // a caixa ficou presa na montagem; no turno seguinte o número certo não aparecia e escolhiam outro). Com TODAS as etapas feitas
@@ -2731,6 +2738,11 @@ async function pushTrabAberto(j, estado, forcar){
   const url=(state.cfg && state.cfg.urlTrabAbertos)||null; if(!url||!j) return;
   const id=deviceName()+'|'+j.id;
   if(estado!=='fechado' && jaFechado(id)) return;          // fechado não volta a abrir
+  // 21-10-2026: ela — "o Pedro já saiu… eu vi o Pedro fechar o trabalho" (EM2783: saiu às 12:49 com as etapas marcadas, a caixa ficou
+  // na montagem e este aparelho continuou a mandar "aberto" com o nome dele → o plano e os outros aparelhos diziam "a trabalhar
+  // agora"). Sem ninguém ativo o trabalho vai como "parado": a caixa continua no aparelho para o turno seguinte, mas os outros
+  // ecrãs (Painel, plano, Supervisor, quadro) só contam os "aberto". Quando alguém entra de novo volta a "aberto".
+  if(estado==='aberto' && !j.transp && !jobWorkersAtivos(j).length) estado='parado';
   const sig=trabAssinatura(j,estado);
   if(!forcar && estado!=='fechado' && _trabSig[id]===sig) return;   // nada mudou → não escreve
   const rec=trabRec(j,estado);
@@ -2791,6 +2803,7 @@ function recuperarTrabAbertos(rows){
   let n=0;
   for(const id in porId){ const g=porId[id], x=g.ult;
     if(g.fechado || jaFechado(id)) continue;
+    if(/^parado/.test(String(x.Estado||''))) continue;              // 21-10: sem ninguém a trabalhar — não ressuscitar com o relógio a contar
     if(String(x.Dispositivo||'')!==eu) continue;
     const dia=trabDataISO(x.Data); if(dia!==hoje) continue;
     const jid=String(x.JobID||''); if(!jid) continue;
