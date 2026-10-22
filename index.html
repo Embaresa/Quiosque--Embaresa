@@ -1664,7 +1664,17 @@ function painelPlano(){ state._quadroPre=null; state._trPre=null; const ver=area
   return p; }
 // 21-10: ela — "está ok, mas o Pedro está na 2783" → em cada tarefa, quem está a trabalhar nela agora (neste aparelho e nos outros:
 // trabalhos abertos da nuvem, state._outros). Nas entregas, quem tem a caixa num transporte aberto.
-function quemNaTarefa(t){ const s=String(t.serie||'').trim().toUpperCase(); if(!s) return ''; const n=new Set();
+function quemNaTarefa(t){
+  // 22-10-2026: ela — "porque não aparece o Pedro nas cunhas?" → as tarefas de componentes não têm série: reconhece-se o trabalho pelo
+  // componente (série "N*<ID>-xxxx", j.comp.id), neste aparelho e nos outros
+  if(t.comp){ const id=String(t.comp).trim().toUpperCase(), n=new Set(), tem=x=>String(x||'').toUpperCase().split(/[\s,;·]+/).some(y=>y.includes('*'+id+'-'));
+    // ela: "não, só aparece no 1.º turno" → o mesmo componente nos dois turnos: quem está a trabalhar aparece só na tarefa do turno de agora
+    const tA=new Date().getHours()<14?'T1':'T2', irmas=((state.cfg&&state.cfg.quadro&&state.cfg.quadro.tarefas)||[]).filter(x=>x!==t && x.id!==t.id && !x.fechada && x.comp===t.comp && x.dia===t.dia && x.area===t.area);
+    if(t.turno && t.turno!==tA && irmas.some(x=>x.turno===tA)) return '';
+    (state.jobs||[]).forEach(j=>{ if(j.status==='done') return; if((j.comp&&String(j.comp.id).toUpperCase()===id) || (j.series||[]).some(tem)) jobWorkersAtivos(j).forEach(w=>{ if(w.opCurto) n.add(w.opCurto); }); });
+    (state._outros||[]).forEach(o=>{ if(tem(o.series)) String(o.quem||'').split(/\s*,\s*/).forEach(q=>{ if(q && q!=='—') n.add(q); }); });
+    return [...n].join(', '); }
+  const s=String(t.serie||'').trim().toUpperCase(); if(!s) return ''; const n=new Set();
   (state.jobs||[]).forEach(j=>{ if(j.status==='done') return;
     const tem=t._entrega?(j.transp&&(j.transp.caixas||[]).some(c=>String(c.serie||'').toUpperCase()===s)):(j.series||[]).some(x=>String(x).trim().toUpperCase()===s);
     if(tem) jobWorkersAtivos(j).forEach(w=>{ if(w.opCurto) n.add(w.opCurto); }); });
