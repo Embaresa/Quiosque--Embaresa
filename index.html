@@ -1067,9 +1067,9 @@ function registarFase(j, faseId){ const a=lerFases(); const quem=(j.workers||[])
 // quantidade) nem às estruturas (S…). A saída já era automática no transporte (trPartir).
 function stockEntradaAuto(j, faseId){ try{
   const fl=fluxoDoArtigo(j.artigo); if(!fl || fl.quant) return; const prox=proxFase(fl,faseId); if(!prox || prox.id!=='arm2') return;
-  const ja=computeStock(), noStock=new Set((ja[j.artigo]||[]).map(s=>String(s).toUpperCase()));
+  const ja=computeStock(), noStock=new Set((ja[j.artigo]||[]).map(chaveSerie));
   const q=loadStockQ(), t=nowTs(), dh=new Date().toLocaleString('pt-PT'), quem=(j.workers||[]).map(w=>w.opCurto).filter(Boolean).join(', ');
-  let n=0; (j.series||[]).forEach(s=>{ s=String(s||'').trim(); if(!s || isEstr(s) || noStock.has(s.toUpperCase())) return;
+  let n=0; (j.series||[]).forEach(s=>{ s=String(s||'').trim(); if(!s || isEstr(s) || noStock.has(chaveSerie(s))) return;
     q.push({ ID:'STA-'+t+'-'+s, Data:dstr(t), Motorista:'AUTO · '+(quem||'montagem'), Programa:j.programa||progDoArtigo(j.artigo)||'', Artigo:j.artigo, NumSerie:s, Movimento:'Entra', Destino:'', DataHoraRegisto:dh }); n++; });
   if(n){ saveStockQ(q); syncStockQ(); } }catch(e){} }
 // fase atual de uma caixa: o que já se sabe (fases concluídas + trabalhos registados + estado nas Encomendas)
@@ -1850,8 +1850,12 @@ async function syncStockQ(){ if(_syncingS)return; const url=(state.cfg&&state.cf
 async function loadStockMap(){ const url=(state.cfg&&state.cfg.urlStockLer)||null; if(!url)return; try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); if(r.ok){ let rows=await r.json(); if(!Array.isArray(rows))rows=(rows&&rows.value)||[]; localStorage.setItem(LS.stockmap,JSON.stringify(rows)); } }catch(e){} }
 function computeStock(){ let srv=[]; try{ srv=JSON.parse(localStorage.getItem(LS.stockmap)||'[]'); }catch(e){}
   const rows=srv.concat(loadStockQ()); const last={};
-  rows.forEach(r=>{ const art=(r.Artigo||r.artigo||''); const se=String(r.NumSerie||r.numSerie||'').trim(); const mv=(r.Movimento||r.movimento||''); if(!se)return; last[art+'|'+se]={art,se,mv}; });
+  // 22-10-2026: ela — "não podes permitir" (Praetor-EH: "2759" do motorista e "EM2759" da entrada automática = 2 caixas). A mesma caixa
+  // escrita com ou sem "EM" é UMA só: a chave são os algarismos; mostra-se a versão com letras.
+  rows.forEach(r=>{ const art=(r.Artigo||r.artigo||''); const se=String(r.NumSerie||r.numSerie||'').trim(); const mv=(r.Movimento||r.movimento||''); if(!se)return; const k=art+'|'+chaveSerie(se), ant=last[k];
+    last[k]={art,se:(/[A-Za-z]/.test(se)||!ant)?se:(/[A-Za-z]/.test(ant.se)?ant.se:se),mv}; });
   const map={}; Object.keys(last).forEach(k=>{ const x=last[k]; if(/entra/i.test(x.mv)){ (map[x.art]=map[x.art]||[]).push(x.se); } }); return map; }
+function chaveSerie(s){ s=String(s||'').trim().toUpperCase(); const d=s.replace(/\D/g,'').replace(/^0+/,''); return (d && /^[A-Z]{0,3}\d+$/.test(s)) ? d : s; }
 function progDoArtigo(a){ const x=(state.cfg.artigos||[]).find(y=>y.artigo===a); return x?(x.programa||''):''; }
 /* ============ #4 CONTAGEM DIÁRIA DE MATERIAIS (motoristas) — 13-10-2026 ============
    A Sónia: "preciso criar no tablet dos motoristas um sítio onde eles façam contagem de materiais todos os dias e
@@ -2015,15 +2019,18 @@ function confirmStock(){ const s=state.smov;
         if(Math.abs(a.length-b.length)===1){ const [c,l]=a.length<b.length?[a,b]:[b,a]; for(let i=0;i<l.length;i++) if(l.slice(0,i)+l.slice(i+1)===c) return true; } return false; };
       const ok=[];
       for(const x of series){
-        if(encArt.some(e=>dg(e.serie)===dg(x))){ ok.push(x); continue; }
+        { const e0=encArt.find(e=>dg(e.serie)===dg(x)); if(e0){ ok.push(String(e0.serie).trim()); continue; } }   // 22-10: grava-se o nº das encomendas ("2759" → "EM2759")
         const sug=encArt.filter(e=>parecido(dg(x),dg(e.serie)) && String(e.estado||'').toLowerCase()!=='entregue').map(e=>String(e.serie));
-        if(sug.length && confirm('A série '+x+' NÃO existe nas encomendas de '+s.artigo+'.\n\nQueres dizer a '+sug[0]+'?\n\nOK = fica '+sug[0]+'\nCancelar = não é essa')){ ok.push(/^\d+$/.test(x)?dg(sug[0]):sug[0]); continue; }
+        if(sug.length && confirm('A série '+x+' NÃO existe nas encomendas de '+s.artigo+'.\n\nQueres dizer a '+sug[0]+'?\n\nOK = fica '+sug[0]+'\nCancelar = não é essa')){ ok.push(sug[0]); continue; }
         if(!confirm('A série '+x+' não existe nas encomendas de '+s.artigo+'.\n\nConfirma o número que está na caixa.\n\nOK = registar '+x+' mesmo assim\nCancelar = voltar para corrigir')) return;
         ok.push(x);
       }
       series=ok;
     }
   }
+  // 22-10: uma ENTRADA de uma caixa que já está no stock não se regista (era assim que a mesma caixa ficava 2x)
+  if(s.tipo==='Entra'){ const noSt=new Set((computeStock()[s.artigo]||[]).map(chaveSerie)), ja=series.filter(x=>noSt.has(chaveSerie(x)));
+    if(ja.length){ alert('Já está no stock: '+ja.join(', ')+'\n\nEsta entrada não se regista (a caixa ficava contada duas vezes).'); series=series.filter(x=>!noSt.has(chaveSerie(x))); if(!series.length) return; } }
   const dh=new Date().toLocaleString('pt-PT'); const dia=dstr(nowTs()); const q=loadStockQ();
   series.forEach(serie=>{ q.push({ ID:'ST-'+(state.op.pin||'x')+'-'+nowTs()+'-'+serie, Data:dia, Motorista:state.op.nome, Programa:s.programa||'', Artigo:s.artigo, NumSerie:serie, Movimento:s.tipo, Destino:(s.tipo==='Sai'?'ANN':''), DataHoraRegisto:dh }); });
   saveStockQ(q); syncStockQ();
