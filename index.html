@@ -1618,7 +1618,15 @@ function tarefasDoQuadro(areaId){ const vt=quadroVeTestes(), q=((state.cfg&&stat
   q.filter(t=>t.area===id && t.serie && t.dia<hoje && t.dia>=lim).sort((a,b)=>String(b.dia).localeCompare(String(a.dia))).forEach(t=>{
     if(de.some(x=>k(x)===k(t)) || vem.some(x=>k(x)===k(t)) || estadoTarefaQ(t)==='ok') return; vem.push(Object.assign({},t,{_vem:t.dia})); });
   // 21-10: caixa à espera de material → vai para o grupo «⏸ À espera de material» (t._esp)
-  return (id==='log'?entregasDoQuadro():[]).concat(vem,de).map(t=>{ const e=(!t._entrega && t.serie)?esperaDe(t.artigo,t.serie):null; return e?Object.assign({},t,{_esp:e}):t; }); }
+  const lst=(id==='log'?entregasDoQuadro():[]).concat(vem,de).map(t=>{ const e=(!t._entrega && t.serie)?esperaDe(t.artigo,t.serie):null; return e?Object.assign({},t,{_esp:e}):t; });
+  // 22-10-2026: ela — "estas caixas estão em curso a aguardar lonas … no quiosque não aparecem" (EM2240, EM2457: não estão no plano de
+  // hoje) → as caixas à espera de material aparecem SEMPRE no grupo ⏸ da área da operação em que pararam; tocar = continuar.
+  const ja=new Set(lst.map(t=>String(t.serie||'').toUpperCase()+'|'+t.artigo)), ult={};
+  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const f=String(r.Fase||''); if(f!=='ESPERA'&&f!=='ESPERA-FIM') return; const k=String(r.Serie||'').trim().toUpperCase()+'|'+String(r.Artigo||'').trim(), n=Number(String(r.ID||'').split('-')[1])||0; if(!ult[k]||n>ult[k].n) ult[k]={n,r}; });
+  Object.entries(ult).forEach(([k,u])=>{ if(u.r.Fase!=='ESPERA' || ja.has(k) || isEstr(u.r.Serie)) return; const op=String(u.r.Operacao||''), o=((state.cfg&&state.cfg.operacoes)||[]).find(x=>x.operacao===op);
+    const ar=o?AREAS_Q.find(a=>(a.unidades||[]).includes(o.unidade)):null; if(!ar || ar.id!==id) return;
+    lst.push({ id:'ESP-'+k, dia:hoje, area:id, artigo:String(u.r.Artigo||'').trim(), serie:String(u.r.Serie||'').trim(), operacao:op, turno:'', nota:'', _soEspera:true, _esp:esperaDe(u.r.Artigo,u.r.Serie) }); });
+  return lst; }
 // 21-10-2026: ela — "os transportes saem automáticos do plano de entregas". Na área Transportes, as caixas com entrega pedida para
 // hoje (e as atrasadas dos últimos 14 dias, ainda não entregues) aparecem sozinhas; tocar → PIN → o transporte abre com elas na carga.
 function entregasDoQuadro(){ const hoje=dstr(nowTs()), lim=dstr(nowTs()-14*864e5), emTr=new Set();
@@ -2267,8 +2275,7 @@ function renderConfCaixa(w){
 // 22-10-2026: ela — "quando não houver plano eles só podem fazer coisas para stock, não pode permitir entrar em números" (o William, no
 // 2.º turno sem plano, começou por iniciativa própria uma estrutura Lower Dir). Nas áreas de config.soComPlano (por omissão soldadura,
 // montagem e fracs) só se começa uma caixa/estrutura que esteja no plano de hoje (ou que venha de dias anteriores); ajudar um colega
-// que já está a trabalhar nela é permitido, e continuar uma estrutura que já existe também. O resto: componentes para stock (🧰), ou a
-// supervisora autoriza com o PIN dela.
+// que já está a trabalhar nela é permitido, e continuar uma estrutura que já existe também. O resto: componentes para stock (🧰).
 function foraDoPlanoOK(d, series){
   const c=state.cfg||{}, areas=Array.isArray(c.soComPlano)?c.soComPlano:(c.soComPlano===false?[]:['sold','mont1','mont2']);
   const a=AREAS_Q.find(x=>(x.unidades||[]).includes(d.unidade)); if(!a || !areas.includes(a.id)) return true;
@@ -2282,10 +2289,16 @@ function foraDoPlanoOK(d, series){
     return L.some(t=>t.serie && dg(t.serie)===dg(s)); };
   const fora=series.filter(s=>!ok(s)); if(!fora.length) return true;
   const nv=series.every(isEstr)?'Esta estrutura nova':'Esta caixa';
-  if(!confirm((L.length?nv+' não está no plano de hoje':'Hoje não há plano para '+a.nome)+': '+fora.join(', ')+'.\n\nSem plano só se fazem COMPONENTES PARA STOCK (🧰).\n\nOK = a supervisora autoriza (pede o PIN)\nCancelar = ir para os componentes para stock')){
-    state._csel=null; state._cn=1; if(!state.area) state._cArea=a.id; state.view='compstock'; render(); window.scrollTo(0,0); return false; }
-  const p=prompt('PIN da supervisora:'); if(!ehSup(String(p||'').trim())){ toast('PIN errado — só a supervisora pode autorizar trabalho fora do plano','err'); return false; }
-  toast('Autorizado pela supervisora (fora do plano)','ok'); return true; }
+  // ela: "eu não posso dar-lhes o PIN" / "eu ou o Rui, mas se nenhum de nós estiver?" → autoriza a Sónia ou o Rui, cada um com o SEU
+  // PIN, ali ao pé do quiosque (config.autorizamForaPlano = nomes dos operadores que podem; o PIN de supervisora também serve).
+  // Se nenhum dos dois estiver: componentes para stock. Quem autorizou fica nos Comentários do registo.
+  const irStock=()=>{ state._csel=null; state._cn=1; if(!state.area) state._cArea=a.id; state.view='compstock'; render(); window.scrollTo(0,0); return false; };
+  const quem=(c.autorizamForaPlano||['Rui Miguel Charrua Richáu']), nomesQ=quem.map(n=>curto(n)).join(' ou ');
+  if(!confirm((L.length?nv+' não está no plano de hoje':'Hoje não há plano para '+a.nome)+': '+fora.join(', ')+'.\n\nSem plano só se fazem COMPONENTES PARA STOCK (🧰).\n\nOK = a Sónia ou '+nomesQ+' está aqui e autoriza (põe o PIN dele/dela)\nCancelar = ir para os componentes para stock (se nenhum estiver)')) return irStock();
+  const p=String(prompt('PIN de quem autoriza (Sónia ou '+nomesQ+'):')||'').trim(); if(!p) return irStock();
+  const opA=((c.operadores)||[]).find(o=>String(o.pin)===p && quem.includes(o.nome)), nomeA=ehSup(p)?'Sónia':(opA?curto(opA.nome):'');
+  if(!nomeA){ alert('Esse PIN não pode autorizar trabalho fora do plano.\n\nVais para os componentes para stock.'); return irStock(); }
+  d._notaCont=(d._notaCont?d._notaCont+' ':'')+'[fora do plano: autorizado por '+nomeA+']'; toast('Autorizado por '+nomeA+' (fora do plano)','ok'); return true; }
 function startJobConfirmado(){
   const d=state.draft; let series=[];
   let foraLista=[];
