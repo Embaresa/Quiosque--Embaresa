@@ -2261,6 +2261,28 @@ function renderConfCaixa(w){
   g.append(el('button',{class:'big ghost',onclick:()=>{ state.view=state._confVolta||'board'; render(); }},'‹  Não, voltar'));
   g.append(el('button',{class:'big ok',onclick:()=>{ state._confCx=true; startJob(); }},'✅  Sim, é esta'));
   w.append(g); }
+// 22-10-2026: ela — "quando não houver plano eles só podem fazer coisas para stock, não pode permitir entrar em números" (o William, no
+// 2.º turno sem plano, começou por iniciativa própria uma estrutura Lower Dir). Nas áreas de config.soComPlano (por omissão soldadura,
+// montagem e fracs) só se começa uma caixa/estrutura que esteja no plano de hoje (ou que venha de dias anteriores); ajudar um colega
+// que já está a trabalhar nela é permitido, e continuar uma estrutura que já existe também. O resto: componentes para stock (🧰), ou a
+// supervisora autoriza com o PIN dela.
+function foraDoPlanoOK(d, series){
+  const c=state.cfg||{}, areas=Array.isArray(c.soComPlano)?c.soComPlano:(c.soComPlano===false?[]:['sold','mont1','mont2']);
+  const a=AREAS_Q.find(x=>(x.unidades||[]).includes(d.unidade)); if(!a || !areas.includes(a.id)) return true;
+  if(d.modo!=='Encomenda' && !series.every(isEstr)) return true;          // caixas para stock (sem nº)
+  const S=x=>String(x||'').trim().toUpperCase(), dg=x=>S(x).replace(/^[A-Z]{1,3}(?=\d)/,'');
+  const L=tarefasDoQuadro(a.id).filter(t=>!t._entrega && !t.comp), fases=lerFases().concat(state._fasesNuvem||[]);
+  const aTrabalhar=s=>(state.jobs||[]).some(j=>j.status!=='done' && jobWorkersAtivos(j).length && (j.series||[]).some(y=>S(y)===S(s)))
+    || (state._outros||[]).some(o=>S(o.series).split(/[\s,;·]+/).includes(S(s)));
+  const ok=s=>{ if(aTrabalhar(s)) return true;
+    if(isEstr(s)) return L.some(t=>!t.serie && t.operacao===d.operacao) || L.some(t=>S(t.serie)===S(s)) || fases.some(r=>S(r.Serie)===S(s) && r.Fase!=='ESPERA');
+    return L.some(t=>t.serie && dg(t.serie)===dg(s)); };
+  const fora=series.filter(s=>!ok(s)); if(!fora.length) return true;
+  const nv=series.every(isEstr)?'Esta estrutura nova':'Esta caixa';
+  if(!confirm((L.length?nv+' não está no plano de hoje':'Hoje não há plano para '+a.nome)+': '+fora.join(', ')+'.\n\nSem plano só se fazem COMPONENTES PARA STOCK (🧰).\n\nOK = a supervisora autoriza (pede o PIN)\nCancelar = ir para os componentes para stock')){
+    state._csel=null; state._cn=1; if(!state.area) state._cArea=a.id; state.view='compstock'; render(); window.scrollTo(0,0); return false; }
+  const p=prompt('PIN da supervisora:'); if(!ehSup(String(p||'').trim())){ toast('PIN errado — só a supervisora pode autorizar trabalho fora do plano','err'); return false; }
+  toast('Autorizado pela supervisora (fora do plano)','ok'); return true; }
 function startJobConfirmado(){
   const d=state.draft; let series=[];
   let foraLista=[];
@@ -2305,6 +2327,7 @@ function startJobConfirmado(){
       series=['STOCK-'+Date.now().toString().slice(-6)];
     }
   }
+  if(!foraDoPlanoOK(d, series)) return;   // 22-10: sem plano, só componentes para stock
   { const cx=series.reduce((t,x)=>t+caixasDaSerie(x),0);
     if(cx>series.length && series.length>1 && !confirm('Escolheste '+series.length+' CONJUNTOS = '+cx+' CAIXAS.\n\n'+series.map(x=>'   '+x+'   ('+caixasDaSerie(x)+' caixas)').join('\n')+'\n\nCada linha é um conjunto, não uma caixa só.\nSe vais fazer só um conjunto, cancela e escolhe só uma linha.\n\nÉ mesmo isto que vais fazer agora?')) return; }
   // 14-10-2026 - a Sónia: "a soldadura está a escolher mal os números… só está 1 Lower Dir em curso" (a mesma soldadura ficou em
