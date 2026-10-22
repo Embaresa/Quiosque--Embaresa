@@ -1314,7 +1314,10 @@ function renderFimFase(w,j,f){
   if(P.p===1){
     w.append(passo('Passo 1 de 2 · '+(isEstr(serie)?'estrutura ':'caixa ')+(j.series||[]).join(', ')));
     const B=blocoEtapas(w,j);
-    w.append(el('button',{class:'big ok',style:'margin-top:4px',onclick:()=>{ if(!B.sel.length && !B.usos().length && !confirm('Não marcaste nenhuma etapa.\n\nNão acabaste nenhuma etapa neste turno?')) return; P.p=2; render(); }},'Seguinte ➜'));
+    // 22-10-2026: ela — "o 2521 está terminado na soldadura, não entendo porque não está": as etapas 1-3 vieram do stock e o Hilenio
+    // (5 h) e o William saíram sem marcar as 4 e 5 — a pergunta "não acabaste nenhuma?" não aparecia porque o stock contava como marcado.
+    w.append(el('button',{class:'big ok',style:'margin-top:4px',onclick:()=>{ const resto=B.et.filter(e=>{ const n=Number(e.n); return !B.feitas.has(n) && !B.stk.includes(n) && !B.doJob.has(n); });
+      if(!B.sel.length && !confirm((B.usos().length?'Só marcaste o que veio do stock.':'Não marcaste nenhuma etapa.')+'\n\nNão acabaste NENHUMA destas etapas neste turno?\n\n'+resto.map(e=>'   '+e.n+'. '+e.nome).join('\n')+'\n\nOK = não acabei nenhuma\nCancelar = voltar e marcar as que acabei')) return; P.p=2; render(); }},'Seguinte ➜'));
     return; }
   const B=blocoEtapas(el('div'),j), us=B.usos(), agora=new Set(B.sel.concat(us.map(u=>u.n))), doStock=etapasDoStock(j.artigo,serie,j.operacao);
   const faltam=B.et.filter(e=>{ const n=Number(e.n); return !B.feitas.has(n) && !agora.has(n) && !B.doJob.has(n) && !doStock.has(n); });
