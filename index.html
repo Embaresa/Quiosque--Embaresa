@@ -630,7 +630,7 @@ async function loadIndQ(){
   try{ const r=await fetch('indicadores-quiosque.json?_='+Date.now(),{cache:'no-store'}); if(r.ok) x=await r.json(); }catch(e){}
   const url=state.cfg&&state.cfg.urlIndicadoresLer;
   if(!(x&&x.atual) && url){ try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); let y=await r.json(); if(typeof y==='string') y=JSON.parse(y); if(y&&y.body) y=y.body; if(y&&y['$content']) y=JSON.parse(decodeURIComponent(escape(atob(y['$content'])))); x=y; }catch(e){} }
-  state._indQ=(x&&x.atual&&x.anterior)?{ atual:x.atual, anterior:x.anterior, gerado:x.gerado }:null;
+  state._indQ=(x&&x.atual&&x.anterior)?{ atual:x.atual, anterior:x.anterior, gerado:x.gerado, pessoa:x.pessoa||null, mesPessoa:x.mesPessoa||null, tarefas:x.tarefas||null }:null;
   if(state.view==='board') render();
 }
 function faixaIndicadores(){
@@ -965,6 +965,31 @@ function renderPertDetail(w){
     el('div',{style:'font-family:var(--mono);font-size:40px;font-weight:700;color:var(--pause);margin-top:6px','data-pert':p.id}, fmtDur(nowTs()-p.startTs))));
   w.append(el('button',{class:'big ok',onclick:()=>finishPert(p)},'■  Terminar paragem'));
 }
+// 23-10-2026: ela — "quero colocar quando entram no quiosque o quadro com a taxa de registo e o absentismo". Depois do PIN, no
+// "Confirma quem és": o mês até ontem e o mês anterior. Os números vêm do PC (gerar-indicadores-quiosque.ps1) SEM nomes: a chave é
+// a pinH do PIN de cada um, por isso cada pessoa só vê os seus.
+function quadroPessoa(op){ const I=state._indQ; if(!I||!I.pessoa||!op||op.admin) return null; const x=I.pessoa[pinH(op.pin)]; if(!x||!x.atual) return null;
+  const NM=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'], mes=k=>{ const d=I.mesPessoa&&I.mesPessoa[k]; return d?NM[Number(d.slice(5,7))-1]:''; };
+  const pct=v=>v==null?'—':Math.round(Math.min(1,v)*100)+' %', corT=v=>v==null?'#94a3b8':v>=0.95?'#34d399':v>=0.85?'#f5b52b':'#f2617a', corA=v=>v==null?'#94a3b8':v<=0.02?'#34d399':v<=0.06?'#f5b52b':'#f2617a';
+  const cx=(tit,val,cor,sub,ant)=>el('div',{style:'flex:1;min-width:200px;background:#0f1d2a;border:1px solid #23394a;border-radius:16px;padding:14px 16px'},
+    el('div',{style:'font-size:13px;color:var(--soft);font-weight:700;text-transform:uppercase;letter-spacing:.05em'},tit),
+    el('div',{style:'font-size:40px;font-weight:800;line-height:1.1;color:'+cor},val), el('div',{style:'font-size:13px;color:var(--soft)'},sub), ant?el('div',{style:'font-size:12px;color:#64748b;margin-top:4px'},ant):null);
+  const a=x.atual, b=x.anterior||{}, h=v=>String(Math.round((v||0)*10)/10).replace('.',','), nome=String(op.nome||'').split(/\s+/)[0];
+  // 23-10: ela — "taxa de registo das operações e coloca uma nota de parabéns ou tens de melhorar algo, motivador"
+  const falta=Math.max(0,(a.pres||0)-(a.reg||0)), muitasPar=(a.par||0)>0.15*(a.pres||1);
+  let msg='', corM='#34d399';
+  if(a.taxa!=null && a.taxa>=0.95) msg=(a.abs!=null&&a.abs<=0.02)?'🎉 Parabéns, '+nome+'! Registaste o teu trabalho todo e não faltaste. Continua assim!':'👏 Muito bem nos registos, '+nome+'!';
+  else if(a.taxa!=null && a.taxa>=0.85){ corM='#f5b52b'; msg='👍 Estás perto, '+nome+'! Faltam '+h(falta)+' h para teres tudo registado. Abre o trabalho logo que começas e fecha só quando acabas.'; }
+  else if(a.taxa!=null){ corM='#f2617a'; msg='💪 Podes melhorar, '+nome+': há '+h(falta)+' h em que estiveste cá sem trabalho registado. Lembra-te de abrir o trabalho no quiosque sempre que começas.'; }
+  // 23-10: ela — "mais que 5 % de absentismo tem de ter uma nota em como prejudica o trabalho"
+  const notaAbs=(a.abs!=null && a.abs>0.05)?'⚠️ O teu absentismo está acima de 5 %. As faltas prejudicam o trabalho: a produção atrasa e os colegas ficam sobrecarregados. Contamos contigo todos os dias.':'';
+  return el('div',{style:'margin:0 0 18px'},
+    el('div',{style:'font-size:15px;font-weight:800;margin-bottom:8px;text-align:center'},'📊 O teu mês'+(mes('atual')?' — '+mes('atual')+' até ontem':'')),
+    msg?el('div',{style:'margin:0 0 10px;padding:12px 16px;border-radius:14px;font-size:17px;font-weight:700;line-height:1.35;background:#0f1d2a;border:2px solid '+corM+';color:#e2e8f0'},msg):null,
+    notaAbs?el('div',{style:'margin:0 0 10px;padding:12px 16px;border-radius:14px;font-size:16px;font-weight:700;line-height:1.35;background:#2a1215;border:2px solid #f2617a;color:#fecaca'},notaAbs):null,
+    el('div',{style:'display:flex;gap:12px;flex-wrap:wrap'},
+      cx('Taxa de registo das operações',pct(a.taxa),corT(a.taxa),h(Math.min(a.reg||0,a.pres||0))+' h registadas das '+h(a.pres)+' h em que estiveste cá',b.taxa!=null?mes('anterior')+': '+pct(b.taxa):''),
+      cx('Absentismo',pct(a.abs),corA(a.abs),(a.faltas?String(Math.round(a.faltas*10)/10).replace('.',',')+' h de faltas'+(a.injust?' ('+String(Math.round(a.injust*10)/10).replace('.',',')+' h injustificadas)':''):'sem faltas'),b.abs!=null?mes('anterior')+': '+pct(b.abs):''))); }
 function renderConfirma(w){
   const op=state.pendingOp; if(!op){ state.view='pin'; return; }
   w.append(el('div',{class:'backbar'}, el('button',{class:'back',onclick:()=>{state.pendingOp=null;state.pinbuf='';state.view='pin';render();}},'‹ Voltar')));
@@ -972,6 +997,7 @@ function renderConfirma(w){
   w.append(el('div',{style:'text-align:center;padding:20px 0 26px'},
     el('div',{style:'font-size:clamp(24px,6vw,34px);font-weight:800;line-height:1.15'}, op.nome),
     el('div',{class:'chip',style:'margin-top:14px'}, (op.seccao||'—')+(op.unidade?(' · '+op.unidade):''))));
+  { const q=quadroPessoa(op); if(q) w.append(q); }
   w.append(el('button',{class:'big ok',onclick:confirmOp},'✓  Sim, sou eu'));
   w.append(el('button',{class:'big ghost',style:'margin-top:10px',onclick:()=>{state.pendingOp=null;state.pinbuf='';state.view='pin';render();}},'Não — não sou eu'));
 }
@@ -1746,6 +1772,10 @@ function painelPlano(){ state._quadroPre=null; state._trPre=null; const ver=area
         el('b',{},t.comp?(t.qtd?'🧰 '+t.qtd+(Number(t.qtd)===1?' jogo':' jogos'):'🧰 quantos der'):(t.serie||(t.semNum?'📝 '+(t.qtd?('faltam '+Math.max(0,t.qtd-(t._feitas||0))+' de '+t.qtd):'sem número'+(t._feitas?' · '+t._feitas+' feitas':'')):'🆕 Estrutura nova'))), el('span',{},t.artigo),
         el('small',{},(t._vem?'↪ vem de '+t._vem.slice(8,10)+'/'+t._vem.slice(5,7)+' · ':'')+t.operacao),
         t._esp?el('small',{style:'color:#fde68a;font-weight:800'},'⏸ falta '+t._esp.material.toLowerCase()+(t._esp.desde?' (desde '+t._esp.desde.slice(8,10)+'/'+t._esp.desde.slice(5,7)+')':'')+' — quando chegar, toca para continuar'):null,
+        // 23-10: ela — "coloca também aqui «⏱ tempo gasto / 🎯 tempo objetivo»" (contas feitas no PC, indicadores-quiosque.json → tarefas)
+        (()=>{ const q=state._indQ&&state._indQ.tarefas&&state._indQ.tarefas[t.id]; if(!q) return null; const fh=h=>String(Math.round(h*10)/10).replace('.',',')+' h';
+          const cor=!q.o?'#94a3b8':q.g<=q.o?'#34d399':q.g<=q.o*1.25?'#f5b52b':'#f2617a';
+          return el('small',{style:'color:'+cor+';font-weight:800;font-size:14px'},'⏱ '+fh(q.g)+' / 🎯 '+(q.o?fh(q.o):(q.pj?fh(q.pj)+' por jogo':'—'))); })(),
         t.nota?el('small',{style:'color:#f5d27a'},'📝 '+t.nota):null,
         quem?el('small',{style:'color:#34d399;font-weight:800;font-size:14px'},'👷 '+quem+' — a trabalhar agora'):null)); }); }); });
   if(!n) p.append(el('div',{class:'empty',style:'margin-top:14px'},'Ainda não há plano para hoje.'));
