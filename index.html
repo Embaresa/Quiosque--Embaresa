@@ -1306,8 +1306,75 @@ function etapasDoJob(j){ const s=String((j.series||[])[0]||'').toUpperCase(), m=
 // para ir para o cliente? … à prova de erro". Na EM2759/2760 o botão "concluída" marcou sozinho as etapas que faltavam e deu a
 // caixa como pronta com um colega ainda a trabalhar nela. Agora: 1) que etapas fizeste; 2) só se TODAS estão feitas pergunta se
 // a caixa está pronta; se faltam etapas a caixa fica na fase; se um colega já a deu como pronta, só regista o tempo.
+// 23-10-2026: ela — "quando selecionam várias caixas podem terminá-las uma mais cedo, outras mais tarde: têm de poder escolher as
+// operações que fizeram em cada caixa". Trabalho com 2+ caixas: uma linha por caixa, um quadrado por etapa. A caixa com as etapas
+// todas fica pronta (passa à fase seguinte, stock automático) e sai do trabalho; as outras continuam para o turno seguinte.
+function registarEtapasSerie(j, serie, nums, quem){ if(!nums||!nums.length) return; const a=lerFases(), t=nowTs();
+  nums.forEach(n=>a.push({ ID:'ET-'+t+'-'+serie+'-'+n, Data:dstr(t), Artigo:j.artigo, Serie:serie, Fase:'E'+n, Operacao:j.operacao, Quem:quem, Dispositivo:deviceName(), DataHoraRegisto:new Date().toLocaleString('pt-PT'), Job:j.id }));
+  gravarFases(a); syncFases(); }
+function renderFimFaseVarias(w,j,f){
+  const et=etapasDe(j.artigo,j.operacao)||[], fl=fluxoDoArtigo(j.artigo), prox=proxFase(fl,f.id), series=(j.series||[]).slice();
+  if(!state._fv||state._fv.j!==j.id) state._fv={j:j.id,p:1,sel:{}};
+  const V=state._fv, passo=t=>el('div',{class:'chip',style:'margin-bottom:8px'},t);
+  const feitas=s=>{ const x=etapasFeitas(j.artigo,s,j.operacao); etapasDoStock(j.artigo,s,j.operacao).forEach(n=>x.add(n));
+    lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const m=String(r.Fase||'').match(/^E(\d+)$/); if(m && r.Job===j.id && String(r.Serie||'').toUpperCase()===String(s).toUpperCase()) x.add(Number(m[1])); }); return x; };
+  const jaPronta=s=>{ const d=fasesConcluidas(j.artigo,s).get(f.id); return !!d && String(d)>=String(j.dia||''); };
+  const sel=s=>V.sel[s]||(V.sel[s]=[]);
+  const meuW=()=>state.op?j.workers.find(x=>x.pin===state.op.pin && !x.endTs):null;
+  if(V.p===1){
+    w.append(passo('Passo 1 de 2 · '+series.length+' caixas'));
+    w.append(el('p',{class:'lbl'},'Toca nas etapas que ACABARAM neste turno, caixa a caixa:'));
+    const tb=el('div',{style:'overflow-x:auto;margin-bottom:12px'}), t=el('table',{style:'border-collapse:separate;border-spacing:6px;min-width:100%'});
+    const hd=el('tr',{},el('th',{style:'text-align:left;color:var(--soft);font-size:13px'},'Caixa'));
+    et.forEach(e=>{ const n=Number(e.n); hd.append(el('th',{style:'font-size:12px;color:var(--soft);font-weight:700;vertical-align:bottom;max-width:120px'},
+      el('div',{},e.n+'. '+e.nome),
+      el('button',{class:'mini',style:'margin-top:4px;font-size:11px',onclick:()=>{ const al=series.filter(s=>!jaPronta(s)&&!feitas(s).has(n)); const todas=al.every(s=>sel(s).includes(n)); al.forEach(s=>{ const L=sel(s), i=L.indexOf(n); if(todas){ if(i>=0) L.splice(i,1); } else if(i<0) L.push(n); }); render(); }},'todas'))); });
+    hd.append(el('th',{})); t.append(hd);
+    series.forEach(s=>{ const pr=jaPronta(s), fe=feitas(s), L=sel(s), tr=el('tr',{});
+      tr.append(el('td',{style:'font-weight:800;font-size:18px;white-space:nowrap;padding-right:6px'},s+(pr?' ✅':'')));
+      et.forEach(e=>{ const n=Number(e.n), ja=pr||fe.has(n), on=L.includes(n);
+        tr.append(el('td',{},el('button',{style:'width:100%;min-width:64px;height:54px;border-radius:12px;font-size:22px;font-weight:800;cursor:pointer;border:2px solid '+(on?'#34d399':ja?'#334155':'#3b5568')+';background:'+(on?'#0f3b2c':ja?'#1e293b':'#0f1d2a')+';color:'+(ja?'#64748b':'#e2e8f0'),
+          onclick:()=>{ if(ja){ toast(pr?'Esta caixa já está pronta':'Esta etapa já foi feita nesta caixa','warn'); return; } const i=L.indexOf(n); if(i>=0) L.splice(i,1); else L.push(n); render(); }},ja?'✔':on?'✅':'⬜'))); });
+      tr.append(el('td',{},pr?el('small',{style:'color:#34d399'},'já pronta'):el('button',{class:'mini',onclick:()=>{ const falta=et.map(e=>Number(e.n)).filter(n=>!fe.has(n)); const tudo=falta.every(n=>L.includes(n)); V.sel[s]=tudo?[]:falta; render(); }},'caixa toda')));
+      t.append(tr); });
+    tb.append(t); w.append(tb);
+    w.append(el('button',{class:'big ok',onclick:()=>{ const nada=series.every(s=>!sel(s).length); if(nada && !confirm('Não marcaste nenhuma etapa em nenhuma caixa.\n\nNão acabaste nenhuma etapa neste turno?')) return; V.p=2; render(); }},'Seguinte ➜'));
+    return; }
+  // passo 2: que caixas ficam prontas
+  const falta=s=>{ const fe=feitas(s), L=sel(s); return et.filter(e=>{ const n=Number(e.n); return !fe.has(n) && !L.includes(n); }); };
+  const prontasJa=series.filter(jaPronta), prontas=series.filter(s=>!jaPronta(s) && !falta(s).length), restam=series.filter(s=>!jaPronta(s) && falta(s).length);
+  const quem=()=>{ const w0=meuW(); return w0?w0.opCurto:(j.workers||[]).map(x=>x.opCurto).join(', '); };
+  const gravar=()=>{ const w0=meuW(), q=quem(); series.forEach(s=>registarEtapasSerie(j,s,sel(s).slice(),q)); if(w0){ w0.etapasPorSerie={}; series.forEach(s=>{ w0.etapasPorSerie[s]=sel(s).slice(); }); w0.etapas=[...new Set([].concat(...series.map(s=>sel(s))))]; } };
+  const fecharProntas=()=>{ if(prontas.length) registarFase(Object.assign({},j,{series:prontas}), f.id); };
+  const tirarProntas=()=>{ const fora=new Set(prontas.concat(prontasJa)); if(!jobWorkersAtivos(j).length && restam.length){ j.series=j.series.filter(s=>!fora.has(s)); save(); pushTrabAberto(j,'aberto',true); } };
+  const limpar=()=>{ state._fv=null; };
+  w.append(passo('Passo 2 de 2 · '+series.length+' caixas'));
+  const caixa=(s,cor,txt)=>el('div',{class:'item',style:'border-left:6px solid '+cor+';margin-bottom:6px'},el('span',{class:'t'},el('b',{style:'font-size:18px'},s),el('small',{},txt)));
+  if(prontas.length) w.append(el('p',{class:'lbl'},'✅ Ficam prontas'+(prox?' e passam para "'+prox.nome+'"':'')+':'),...prontas.map(s=>caixa(s,'#34d399','todas as etapas feitas')));
+  if(prontasJa.length) w.append(el('p',{class:'lbl'},'Já estavam prontas:'),...prontasJa.map(s=>caixa(s,'#64748b','dada como pronta por um colega')));
+  if(restam.length) w.append(el('p',{class:'lbl'},'⏳ Continuam no turno seguinte:'),...restam.map(s=>caixa(s,'#f59e0b','faltam: '+falta(s).map(e=>e.n+'. '+e.nome).join(' · '))));
+  const voltar=el('button',{class:'big ghost',style:'margin-top:10px',onclick:()=>{ V.p=1; render(); }},'⬅ Voltar às etapas');
+  if(!restam.length){
+    const g=el('div',{class:'pc-cands'}), sim=el('button',{class:'pc-cx fim-sim',onclick:()=>{ gravar(); fecharProntas(); limpar(); state._qty=series.length; finishJob(j); }});
+    sim.append(imgFase(fl,prox?prox.id:f.id,j.artigo), el('b',{},'✅ Terminar'), el('small',{},'as '+series.length+' caixas ficam prontas'));
+    g.append(sim); w.append(g, voltar); return; }
+  if(V.esp){
+    w.append(el('p',{class:'lbl',style:'font-size:20px'},'⏸ Que material falta para acabar '+restam.join(', ')+'?'));
+    const g=el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:10px'});
+    MATERIAIS_ESPERA.forEach(([ic,m])=>g.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:4px;padding:16px;border-left:6px solid #eab308',onclick:()=>{
+      const w0=meuW(); gravar(); fecharProntas(); registarEspera(Object.assign({},j,{series:restam}),m); limpar(); toast('⏸ '+restam.join(', ')+' à espera de '+m.toLowerCase(),'ok'); state.jobPhase='menu'; if(w0) leaveWorker(j,w0); else render(); tirarProntas(); }},
+      el('span',{style:'font-size:30px;line-height:1'},ic), el('b',{style:'font-size:18px'},m))));
+    w.append(g, el('button',{class:'big ghost',style:'margin-top:10px',onclick:()=>{ V.esp=false; render(); }},'⬅ Voltar')); return; }
+  w.append(el('p',{class:'lbl',style:'font-size:20px;margin-top:6px'},'Porque é que '+(restam.length===1?'a caixa '+restam[0]+' não ficou acabada':'as caixas '+restam.join(', ')+' não ficaram acabadas')+'?'));
+  const gq=el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px'});
+  gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #34d399',onclick:()=>{ const w0=meuW(); gravar(); fecharProntas(); limpar(); state.jobPhase='menu'; if(w0) leaveWorker(j,w0); else render(); tirarProntas(); }},
+    el('span',{style:'font-size:34px;line-height:1'},'🕔'), el('b',{style:'font-size:19px'},'Acabou o meu turno'), el('small',{style:'color:var(--soft)'},'há material — o próximo turno continua')));
+  gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #eab308;background:#2a2410',onclick:()=>{ V.esp=true; render(); }},
+    el('span',{style:'font-size:34px;line-height:1'},'⏸'), el('b',{style:'font-size:19px;color:#fde68a'},'Falta material'), el('small',{style:'color:var(--soft)'},'não dá para continuar até chegar')));
+  w.append(gq, voltar); }
 function renderFimFase(w,j,f){
   if(!etapasDe(j.artigo,j.operacao)) return renderFimFaseSimples(w,j,f);
+  if((j.series||[]).length>1 && !(j.series||[]).some(isEstr)) return renderFimFaseVarias(w,j,f);
   const fl=fluxoDoArtigo(j.artigo), prox=proxFase(fl,f.id), serie=(j.series||[])[0];
   if(!state._fimPasso||state._fimPasso.j!==j.id) state._fimPasso={j:j.id,p:1};
   const P=state._fimPasso, passo=t=>el('div',{class:'chip',style:'margin-bottom:8px'},t);
@@ -1613,10 +1680,20 @@ function areaIdAtual(){ const a=AREAS_Q.find(x=>x.nome===state.areaNome); return
 // nos últimos 7 dias passa sozinho para hoje ("↪ vem de dd/mm"), até a caixa ser dada como concluída ou ela o tirar (fechada).
 // 21-10: tarefas marcadas "🧪 teste" no quadro.html só aparecem na cópia de teste do quiosque (window.__TESTE) e nos aparelhos de teste
 function quadroVeTestes(){ return !!window.__TESTE || (((state.cfg&&state.cfg.avaliacaoMensal&&state.cfg.avaliacaoMensal.testeDispositivos)||[]).includes(deviceName())); }
+// 23-10-2026: ela — "nas jaulas vou planear 50 e vão ser vários dias até estarem as 50; vai aparecer sempre e vai descontando as que
+// forem fazendo?" → uma tarefa SEM número com quantidade conta as caixas desse artigo dadas como prontas nessa operação desde o dia
+// da tarefa (folha Fases, cada série uma vez; "6*SPOILERS" = 6) e passa de dia para dia até chegar à quantidade (ou ela a tirar).
+function feitasDaTarefa(t){ const vis=new Set(); let n=0;
+  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ if(String(r.Artigo||'').trim()!==t.artigo || String(r.Operacao||'')!==t.operacao || String(r.Data||'').slice(0,10)<t.dia) return;
+    if(/^(E\d+|ESTR|LIG|USO|MI|COMP|ESPERA|ESPERA-FIM|STK.)$/.test(String(r.Fase||''))) return; const s=String(r.Serie||'').trim().toUpperCase(); if(!s||vis.has(s)) return; vis.add(s); n+=parseInt((s.match(/^(\d+)\*/)||[])[1])||1; });
+  return n; }
 function tarefasDoQuadro(areaId){ const vt=quadroVeTestes(), q=((state.cfg&&state.cfg.quadro&&state.cfg.quadro.tarefas)||[]).filter(t=>!t.fechada && (!t.teste || vt)), id=areaId||areaIdAtual(), hoje=dstr(nowTs()), lim=dstr(nowTs()-7*864e5);
   if(!id) return []; const de=q.filter(t=>t.dia===hoje && t.area===id), vem=[], k=t=>String(t.serie||'').toUpperCase()+'|'+t.operacao;
   q.filter(t=>t.area===id && t.serie && t.dia<hoje && t.dia>=lim).sort((a,b)=>String(b.dia).localeCompare(String(a.dia))).forEach(t=>{
     if(de.some(x=>k(x)===k(t)) || vem.some(x=>k(x)===k(t)) || estadoTarefaQ(t)==='ok') return; vem.push(Object.assign({},t,{_vem:t.dia})); });
+  // tarefas sem número com quantidade: passam até estarem feitas todas (sem limite de 7 dias); as de hoje também mostram quantas faltam
+  q.filter(t=>t.area===id && !t.serie && t.semNum && t.dia<hoje).forEach(t=>{ const fe=feitasDaTarefa(t); if(t.qtd && fe>=t.qtd) return; vem.push(Object.assign({},t,{_vem:t.dia,_feitas:fe})); });
+  de.forEach((t,i)=>{ if(!t.serie && t.semNum) de[i]=Object.assign({},t,{_feitas:feitasDaTarefa(t)}); });
   // 21-10: caixa à espera de material → vai para o grupo «⏸ À espera de material» (t._esp)
   const lst=(id==='log'?entregasDoQuadro():[]).concat(vem,de).map(t=>{ const e=(!t._entrega && t.serie)?esperaDe(t.artigo,t.serie):null; return e?Object.assign({},t,{_esp:e}):t; });
   // 22-10-2026: ela — "estas caixas estão em curso a aguardar lonas … no quiosque não aparecem" (EM2240, EM2457: não estão no plano de
@@ -1666,7 +1743,7 @@ function painelPlano(){ state._quadroPre=null; state._trPre=null; const ver=area
           if(t._entrega){ state.intent='transp'; state._trPre=entregasDoQuadro().filter(x=>!x._emTr); state.op=null; state.pinbuf=''; state.view='pin'; render(); return; }   // 21-10: transporte com as caixas do dia
           state.intent='work'; state._areaPre=a; state._quadroPre=t; state.op=null; state.pinbuf=''; state.view='pin'; render(); }},
         el('span',{class:'es'},e==='ok'?'✅':(quem||e==='run')?'▶':''),
-        el('b',{},t.comp?(t.qtd?'🧰 '+t.qtd+(Number(t.qtd)===1?' jogo':' jogos'):'🧰 quantos der'):(t.serie||'🆕 Estrutura nova')), el('span',{},t.artigo),
+        el('b',{},t.comp?(t.qtd?'🧰 '+t.qtd+(Number(t.qtd)===1?' jogo':' jogos'):'🧰 quantos der'):(t.serie||(t.semNum?'📝 '+(t.qtd?('faltam '+Math.max(0,t.qtd-(t._feitas||0))+' de '+t.qtd):'sem número'+(t._feitas?' · '+t._feitas+' feitas':'')):'🆕 Estrutura nova'))), el('span',{},t.artigo),
         el('small',{},(t._vem?'↪ vem de '+t._vem.slice(8,10)+'/'+t._vem.slice(5,7)+' · ':'')+t.operacao),
         t._esp?el('small',{style:'color:#fde68a;font-weight:800'},'⏸ falta '+t._esp.material.toLowerCase()+(t._esp.desde?' (desde '+t._esp.desde.slice(8,10)+'/'+t._esp.desde.slice(5,7)+')':'')+' — quando chegar, toca para continuar'):null,
         t.nota?el('small',{style:'color:#f5d27a'},'📝 '+t.nota):null,
@@ -1698,6 +1775,8 @@ function iniciarDoQuadro(t){
   if(!opc){ toast('Esta operação já não existe no catálogo. Escolhe em baixo.','err'); return; }
   state.draft={ artigo:art, programa:progDoArtigo(art)||opc.programa||'', operacao:t.operacao, unidade:opc.unidade, modo:'Encomenda', sel:[], _fora:false, stock:'' };
   state._psel=null; state._pcont=null; state._pescolha=null;
+  // 23-10: tarefa sem número (não há encomenda) → direto ao ecrã das séries com o campo para escrever o número já aberto
+  if(!t.serie && t.semNum){ state.draft._fora=true; state.draft.fora=''; state._pfase=null; state.view='series'; render(); window.scrollTo(0,0); toast('Escreve o número da caixa (não há encomenda)','ok'); return; }
   if(!t.serie){ const f=fl?trabalhoFases(fl).find(x=>x.op.test(t.operacao)):null;   // estrutura nova (soldadura): o percurso dá o código
     if(f){ state._pfase=f.id; state.view='percurso'; render(); return; } state.view='operacao'; render(); return; }
   // 21-10: ela — "o pessoal das fracções não consegue selecionar 4 caixas ao mesmo tempo" (EM2700–2703 no plano: cada toque abria só
@@ -2286,7 +2365,8 @@ function foraDoPlanoOK(d, series){
     || (state._outros||[]).some(o=>S(o.series).split(/[\s,;·]+/).includes(S(s)));
   const ok=s=>{ if(aTrabalhar(s)) return true;
     if(isEstr(s)) return L.some(t=>!t.serie && t.operacao===d.operacao) || L.some(t=>S(t.serie)===S(s)) || fases.some(r=>S(r.Serie)===S(s) && r.Fase!=='ESPERA');
-    return L.some(t=>t.serie && dg(t.serie)===dg(s)); };
+    // 23-10: tarefa planeada SEM número (não há encomenda — ex.: jaulas de sobras) → qualquer número dessa caixa
+    return L.some(t=>t.serie && dg(t.serie)===dg(s)) || L.some(t=>!t.serie && !t.comp && t.artigo===d.artigo && t.operacao===d.operacao); };
   const fora=series.filter(s=>!ok(s)); if(!fora.length) return true;
   const nv=series.every(isEstr)?'Esta estrutura nova':'Esta caixa';
   // ela: "eu não posso dar-lhes o PIN" / "eu ou o Rui, mas se nenhum de nós estiver?" → autoriza a Sónia ou o Rui, cada um com o SEU
@@ -2591,7 +2671,7 @@ function enqueueRegisto(j,wk,concluida){
       UnidadeProducao:(j.unidade||unidadeDaOp(j.operacao,j.artigo)), Posto:postoDaUnidade(j.unidade||unidadeDaOp(j.operacao,j.artigo)), Colaborador:wk.op, Modo:j.modo,
       NumSerie:serie, HoraInicio:hhmm(wk.startTs), HoraFim:hhmm(wk.endTs||nowTs()),
       PausasMin:Math.round(pauMs/60000).toString(), Duracao:Math.round(durMs/60000).toString(),
-      Quantidade:'1', Plano:j.plano, Comentarios:(state.cfg&&state.cfg.modoTeste?'TESTE':((j.comentario||'')+(wk.etapas?(' [etapas: '+(wk.etapas.length?wk.etapas.join(','):'nenhuma')+']'):'')+(wk.stock&&wk.stock.length?(' [stock: '+wk.stock.join(',')+']'):''))), CaixaConcluida:caixaConcl, OperacaoConcluida:(concluida?'Sim':'Nao'),
+      Quantidade:'1', Plano:j.plano, Comentarios:(state.cfg&&state.cfg.modoTeste?'TESTE':((j.comentario||'')+((wk.etapasPorSerie||wk.etapas)?(' [etapas: '+(((wk.etapasPorSerie?(wk.etapasPorSerie[serie]||[]):wk.etapas)||[]).length?(wk.etapasPorSerie?(wk.etapasPorSerie[serie]||[]):wk.etapas).join(','):'nenhuma')+']'):'')+(wk.stock&&wk.stock.length?(' [stock: '+wk.stock.join(',')+']'):''))), CaixaConcluida:caixaConcl, OperacaoConcluida:(concluida?'Sim':'Nao'),
       Equipa:String((j.workers||[]).length), ConcluidoPor:(concluida?(j.terminadoPor||wk.op):''), DataHoraRegisto:dh });
   });
   try{ wk._reg = true; }catch(e){}   // esta sessão já tem registo — a rede não volta a escrever
