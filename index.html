@@ -1613,8 +1613,14 @@ function compParaEtapa(artigo,op,nome){ return ((state.cfg&&state.cfg.componente
 function registarStockComp(j,qtd){ const c=compDoJob(j); if(!c||!(qtd>0)) return; const a=lerFases(); const quem=(j.workers||[]).map(w=>w.opCurto).filter(Boolean).join(', ');
   a.push({ ID:'SP-'+nowTs()+'-'+c.id, Data:dstr(nowTs()), Artigo:'COMP:'+c.id, Serie:(j.series||[]).join(' '), Fase:'STK+', Operacao:c.nome, Quem:quem, Dispositivo:deviceName(), DataHoraRegisto:new Date().toLocaleString('pt-PT'), Job:String(qtd) });
   gravarFases(a); syncFases(); }
+// 23-10-2026: EM2521 — o Valdir fechou às 09:25 e o Pedro às 09:27 e as cunhas saíram DUAS vezes do stock para a mesma caixa.
+// Um componente só sai do stock uma vez por caixa (descontando as correções «correção <série>» que o devolveram).
+function jaSaiuDoStock(s,cid){ const S=String(s||'').trim().toUpperCase(), A='COMP:'+cid, vis=new Set(); let n=0;
+  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ if(String(r.Artigo||'')!==A || vis.has(r.ID)) return; vis.add(r.ID); const rs=String(r.Serie||'').trim().toUpperCase();
+    if(r.Fase==='STK-' && rs===S) n++; else if(r.Fase==='STK+' && rs==='CORREÇÃO '+S) n--; });
+  return n>0; }
 function usarStock(j,usos){ if(!usos||!usos.length) return; const a=lerFases(); const t=nowTs(), dh=new Date().toLocaleString('pt-PT');
-  (j.series||[]).forEach(s=>usos.forEach(u=>{
+  (j.series||[]).forEach(s=>usos.forEach(u=>{ if(jaSaiuDoStock(s,u.c.id)) return;
     a.push({ ID:'SU-'+t+'-'+s+'-'+u.c.id, Data:dstr(t), Artigo:'COMP:'+u.c.id, Serie:s, Fase:'STK-', Operacao:u.c.nome, Quem:'STOCK', Dispositivo:deviceName(), DataHoraRegisto:dh, Job:j.id });
     a.push({ ID:'ES-'+t+'-'+s+'-'+u.n, Data:dstr(t), Artigo:j.artigo, Serie:s, Fase:'E'+u.n, Operacao:j.operacao, Quem:'STOCK', Dispositivo:deviceName(), DataHoraRegisto:dh, Job:j.id }); }));
   gravarFases(a); syncFases(); }
@@ -1745,6 +1751,15 @@ function estadoTarefaQ(t){ try{ if(t._entrega) return t._emTr?'run':''; if(!t.se
 // tudo". config.json → planoPorAparelho {aparelho:[áreas]} e planoTudo [aparelhos que veem tudo]; os outros não mostram o plano.
 function areasDoPlano(){ const c=state.cfg||{}, d=deviceName(); if((c.planoTudo||[]).includes(d) || window.__TESTE) return AREAS_Q.map(a=>a.id);
   const m=c.planoPorAparelho||{}; return m[d]||[]; }
+// 23-10-2026: ela — "o highlight tem que aparecer no quiosque para eles saberem que é prioritário ou urgente". Caixa com entrega
+// programada (a ANN já a pediu e ainda não foi entregue) → 🔥 PRIORITÁRIO; entrega daqui a 2 dias ou menos (ou já passou) → 🚨 URGENTE.
+function entregaProgK(t){ if(!t || !t.serie || t._entrega || t.comp) return null; const s=String(t.serie).trim().toUpperCase();
+  const e=(state.enc||[]).find(x=>String(x.serie||'').trim().toUpperCase()===s && String(x.artigo||'')===String(t.artigo||'') && /solicitad/i.test(x.subEstado||'') && /pendente|produzid/i.test(x.estado||''));
+  // ela: "calma, só colocas o prioritário quando a caixa é para entregar nesse dia ou no dia a seguir" (à sexta, o seguinte é a segunda)
+  if(!e) return null; const d=String(e.entrega||'').slice(0,10); if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  const lim=new Date(); lim.setDate(lim.getDate()+1); while(lim.getDay()===0||lim.getDay()===6) lim.setDate(lim.getDate()+1);
+  // ela: "urgente é para o mesmo dia e prioritário no dia a seguir"
+  return d<=dstr(lim.getTime())?{ data:d, urg:d<=dstr(nowTs()) }:null; }
 function painelPlano(){ state._quadroPre=null; state._trPre=null; const ver=areasDoPlano(); if(!ver.length) return null; const p=el('div',{class:'plano'}), tA=new Date().getHours()<14?'T1':'T2', ord=t=>t._vem?-1:t.turno===tA?0:!t.turno?1:2;
   p.append(el('h2',{},'🗒️ Plano de trabalhos'), el('div',{style:'color:var(--soft);font-size:13px'},'Hoje · toca na tua tarefa e põe o PIN'));
   let n=0;
@@ -1764,11 +1779,14 @@ function painelPlano(){ state._quadroPre=null; state._trPre=null; const ver=area
       .concat([['esp','⏸ À espera de material',esps]]);
     grupos.forEach(([k,nome,g])=>{ if(!g.length) return; const agora=k===tA;
       p.append(el('div',{class:'pturno'+(agora?' agora':'')+(k==='esp'?' esp':'')},nome+(agora?' · agora':'')));
-    g.forEach(t=>{ const quem=quemNaTarefa(t), e=quem?'run':estadoTarefaQ(t);
-      p.append(el('button',{class:'pt'+(e==='ok'?' ok':'')+(t._esp&&!quem?' esp':''),style:'border-left:6px solid '+(t._esp?'#eab308':a.cor),onclick:()=>{
+    const pr=t=>{ const x=entregaProgK(t); return x?(x.urg?2:1):0; };
+    g.slice().sort((x,y)=>pr(y)-pr(x)).forEach(t=>{ const quem=quemNaTarefa(t), e=quem?'run':estadoTarefaQ(t), ep=e==='ok'?null:entregaProgK(t);
+      p.append(el('button',{class:'pt'+(e==='ok'?' ok':'')+(t._esp&&!quem?' esp':''),style:'border-left:6px solid '+(t._esp?'#eab308':ep?(ep.urg?'#ef4444':'#f97316'):a.cor)+(ep&&!t._esp?(ep.urg?';background:#3a1114;border:2px solid #ef4444;border-left:8px solid #ef4444;box-shadow:0 0 0 2px #fde047':';background:#33200f;border:2px solid #f97316;border-left:8px solid #f97316'):''),onclick:()=>{
           if(t._entrega){ state.intent='transp'; state._trPre=entregasDoQuadro().filter(x=>!x._emTr); state.op=null; state.pinbuf=''; state.view='pin'; render(); return; }   // 21-10: transporte com as caixas do dia
           state.intent='work'; state._areaPre=a; state._quadroPre=t; state.op=null; state.pinbuf=''; state.view='pin'; render(); }},
         el('span',{class:'es'},e==='ok'?'✅':(quem||e==='run')?'▶':''),
+        ep?el('div',{style:'display:inline-block;margin-bottom:4px;padding:3px 10px;border-radius:6px;font-weight:900;font-size:15px;letter-spacing:.04em;'+(ep.urg?'background:#fde047;color:#7f1d1d':'background:#f97316;color:#1c0a00')},
+          (ep.urg?'🚨 URGENTE':'🔥 PRIORITÁRIO')+(ep.data?' · entrega '+ep.data.slice(8,10)+'/'+ep.data.slice(5,7):'')):null,
         el('b',{},t.comp?(t.qtd?'🧰 '+t.qtd+(Number(t.qtd)===1?' jogo':' jogos'):'🧰 quantos der'):(t.serie||(t.semNum?'📝 '+(t.qtd?('faltam '+Math.max(0,t.qtd-(t._feitas||0))+' de '+t.qtd):'sem número'+(t._feitas?' · '+t._feitas+' feitas':'')):'🆕 Estrutura nova'))), el('span',{},t.artigo),
         el('small',{},(t._vem?'↪ vem de '+t._vem.slice(8,10)+'/'+t._vem.slice(5,7)+' · ':'')+t.operacao),
         t._esp?el('small',{style:'color:#fde68a;font-weight:800'},'⏸ falta '+t._esp.material.toLowerCase()+(t._esp.desde?' (desde '+t._esp.desde.slice(8,10)+'/'+t._esp.desde.slice(5,7)+')':'')+' — quando chegar, toca para continuar'):null,
