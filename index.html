@@ -1314,6 +1314,8 @@ function blocoEtapas(w,j){ const et=etapasDe(j.artigo,j.operacao); if(!et) retur
   if(!state._etSel||state._etSel.j!==j.id){ const stk=[]; et.forEach(e=>{ const c=compParaEtapa(j.artigo,j.operacao,e.nome); if(c && !feitas.has(Number(e.n)) && stockComp(c.id)>0) stk.push(Number(e.n)); }); state._etSel={j:j.id,s:[],stk}; }
   const sel=state._etSel.s, stk=state._etSel.stk||(state._etSel.stk=[]);
   w.append(el('p',{class:'lbl'},'O que ficou feito neste turno? (toca nas etapas que ACABARAM)'));
+  // 27-10-2026: ela — o Nuno ia mudar de trabalho, «só há duas opções, acaba o turno ou falta de material», e marcou as 5 etapas da EM2380 para conseguir sair
+  w.append(el('p',{class:'muted',style:'font-size:14px;margin:-4px 0 10px'},'⚠ Marca só o que ficou MESMO acabado. Se vais mudar de trabalho, não marques o resto — no passo seguinte escolhes «🔀 Vou mudar de trabalho».'));
   const l=el('div',{class:'list',style:'margin-bottom:12px'});
   et.forEach(e=>{ const n=Number(e.n), ja=feitas.has(n), on=sel.includes(n), c=compParaEtapa(j.artigo,j.operacao,e.nome), st=!ja&&stk.includes(n);
     l.append(el('button',{class:'item',style:(ja||st?'opacity:.55;':'')+(ja?'text-decoration:line-through;':'')+(on?'border-color:#34d399;background:#0f3b2c;':''),onclick:()=>{ if(ja){ toast(doStock.has(n)?'Esta etapa veio do stock':'Esta etapa já foi feita noutro turno','warn'); return; } if(st){ toast('Está marcada "veio do stock" — toca no botão amarelo para mudar','warn'); return; } const i=sel.indexOf(n); if(i>=0) sel.splice(i,1); else sel.push(n); render(); }},
@@ -1350,6 +1352,7 @@ function renderFimFaseVarias(w,j,f){
   if(V.p===1){
     w.append(passo('Passo 1 de 2 · '+series.length+' caixas'));
     w.append(el('p',{class:'lbl'},'Toca nas etapas que ACABARAM neste turno, caixa a caixa:'));
+    w.append(el('p',{class:'muted',style:'font-size:14px;margin:-4px 0 10px'},'⚠ Marca só o que ficou MESMO acabado. Se vais mudar de trabalho, não marques o resto — no passo seguinte escolhes «🔀 Vou mudar de trabalho».'));   // 27-10-2026 (EM2380)
     const tb=el('div',{style:'overflow-x:auto;margin-bottom:12px'}), t=el('table',{style:'border-collapse:separate;border-spacing:6px;min-width:100%'});
     const hd=el('tr',{},el('th',{style:'text-align:left;color:var(--soft);font-size:13px'},'Caixa'));
     et.forEach(e=>{ const n=Number(e.n); hd.append(el('th',{style:'font-size:12px;color:var(--soft);font-weight:700;vertical-align:bottom;max-width:120px'},
@@ -1397,6 +1400,8 @@ function renderFimFaseVarias(w,j,f){
     el('span',{style:'font-size:34px;line-height:1'},'🕔'), el('b',{style:'font-size:19px'},'Acabou o meu turno'), el('small',{style:'color:var(--soft)'},'há material — o próximo turno continua')));
   gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #eab308;background:#2a2410',onclick:()=>{ V.esp=true; render(); }},
     el('span',{style:'font-size:34px;line-height:1'},'⏸'), el('b',{style:'font-size:19px;color:#fde68a'},'Falta material'), el('small',{style:'color:var(--soft)'},'não dá para continuar até chegar')));
+  gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #60a5fa',onclick:()=>{ const w0=meuW(); gravar(); fecharProntas(); limpar(); toast('🔀 '+restam.join(', ')+' ficam a meio — continua-se depois','ok'); state.jobPhase='menu'; if(w0) leaveWorker(j,w0); else render(); tirarProntas(); }},
+    el('span',{style:'font-size:34px;line-height:1'},'🔀'), el('b',{style:'font-size:19px;color:#bfdbfe'},'Vou mudar de trabalho'), el('small',{style:'color:var(--soft)'},'ficam a meio — continua-se mais tarde')));   // 27-10-2026 (EM2380)
   w.append(gq, voltar); }
 function renderFimFase(w,j,f){
   if(!etapasDe(j.artigo,j.operacao)) return renderFimFaseSimples(w,j,f);
@@ -1455,6 +1460,8 @@ function renderFimFase(w,j,f){
       el('span',{style:'font-size:34px;line-height:1'},'🕔'), el('b',{style:'font-size:19px'},'Acabou o meu turno'), el('small',{style:'color:var(--soft)'},'há material — o próximo turno continua')));
     gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #eab308;background:#2a2410',onclick:()=>{ P.esp=true; render(); }},
       el('span',{style:'font-size:34px;line-height:1'},'⏸'), el('b',{style:'font-size:19px;color:#fde68a'},'Falta material'), el('small',{style:'color:var(--soft)'},'não dá para continuar até chegar (alumínio, lona…)')));
+    gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #60a5fa',onclick:()=>{ toast('🔀 A '+oQue+' fica na '+f.nome+' — tu ou um colega continuam depois','ok'); sair(); }},
+      el('span',{style:'font-size:34px;line-height:1'},'🔀'), el('b',{style:'font-size:19px;color:#bfdbfe'},'Vou mudar de trabalho'), el('small',{style:'color:var(--soft)'},'a '+oQue+' fica a meio — continua-se mais tarde')));   // 27-10-2026 (EM2380)
     w.append(gq);
     w.append(voltar); return; }
   // 21-10-2026: ela — "o problema é que eles quando terminam não dão a caixa como concluída" (EM2433, EM2624: as 4 etapas feitas e
@@ -1811,10 +1818,11 @@ function quemNaTarefa(t){
     (state._outros||[]).forEach(o=>{ if(tem(o.series)) String(o.quem||'').split(/\s*,\s*/).forEach(q=>{ if(q && q!=='—') n.add(q); }); });
     return [...n].join(', '); }
   const s=String(t.serie||'').trim().toUpperCase(); if(!s) return ''; const n=new Set();
-  (state.jobs||[]).forEach(j=>{ if(j.status==='done') return;
+  const nOp=v=>String(v||'').toLowerCase().replace(/\s+/g,''), mOp=a=>!a||!t.operacao||t._entrega||nOp(a)===nOp(t.operacao);   // 27-10: a mesma caixa noutra operação não conta (EM2623 no embalamento aparecia «a trabalhar agora» na soldadura e montagem já feitas)
+  (state.jobs||[]).forEach(j=>{ if(j.status==='done') return; if(!mOp(j.operacao)) return;
     const tem=t._entrega?(j.transp&&(j.transp.caixas||[]).some(c=>String(c.serie||'').toUpperCase()===s)):(j.series||[]).some(x=>String(x).trim().toUpperCase()===s);
     if(tem) jobWorkersAtivos(j).forEach(w=>{ if(w.opCurto) n.add(w.opCurto); }); });
-  (state._outros||[]).forEach(o=>{ if(String(o.series||'').toUpperCase().split(/[\s,;·]+/).includes(s)) String(o.quem||'').split(/\s*,\s*/).forEach(q=>{ if(q && q!=='—') n.add(q); }); });
+  (state._outros||[]).forEach(o=>{ if(String(o.series||'').toUpperCase().split(/[\s,;·]+/).includes(s) && mOp(o.op)) String(o.quem||'').split(/\s*,\s*/).forEach(q=>{ if(q && q!=='—') n.add(q); }); });
   return [...n].join(', '); }
 function iniciarDoQuadro(t){
   // 21-10: ela — "e quando eu quiser planear componentes para stock?" → vai direto ao ecrã dos componentes, já escolhido e com os jogos
