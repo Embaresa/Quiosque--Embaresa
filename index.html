@@ -3776,6 +3776,10 @@ function trRenderGuia(w,j){
   w.append(el('a',{class:'big', href:TR_PORTAL_GUIA, target:'embaresaGuia',
       style:'display:block;text-align:center;text-decoration:none',
       onclick:(ev)=>{ try{ trCopiarPayload(j,null); }catch(e){}   // o # perde-se nos saltos do Portal: os dados vao TAMBEM pela area de transferencia, com hora
+      // 29-10: um separador NOVO em cada toque. Com o alvo fixo 'embaresaGuia' a 1.ª guia do dia abria,
+      // mas a partir da 2.ª o browser do telemovel mandava o endereco para o separador do Portal que
+      // ja estava aberto, sem o trazer para a frente - o motorista ficava a olhar para o quiosque.
+      try{ ev.currentTarget.target = 'embaresaGuia' + Date.now(); }catch(e){}
       try{ ev.currentTarget.href = TR_PORTAL_GUIA + '#embaresa=' +
             encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(trPayloadGuia(j)))))); }catch(e){}
         toast('A abrir o Portal com os dados desta entrega','ok'); }},
