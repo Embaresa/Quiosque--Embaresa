@@ -186,7 +186,14 @@
   .pc-cands{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
   .pc-cx{background:var(--card,#122230);border:1px solid var(--line,#223240);border-radius:16px;padding:14px;display:flex;flex-direction:column;align-items:center;gap:6px;color:inherit;cursor:pointer;font:inherit}
   .pc-cx .pc-img{height:110px} .pc-cx b{font-size:24px;font-family:monospace} .pc-cx small{color:#9fb3c2;font-size:13px}
-  .pc-cx.run{border-color:#26c9e2;box-shadow:0 0 0 2px #0e2a33} .pc-cx.fim-sim{border-color:#34d399}</style>
+  .pc-cx.run{border-color:#26c9e2;box-shadow:0 0 0 2px #0e2a33} .pc-cx.fim-sim{border-color:#34d399}/* 29-10: visor dos planos dentro do quiosque, sem imprimir */
+.visorplano{position:fixed;inset:0;z-index:2147483000;background:#2b2f36;display:flex;flex-direction:column}
+.vp-barra{display:flex;align-items:center;gap:8px;padding:8px 10px;background:#111;color:#fff}
+.vp-barra button{font-size:18px;padding:8px 14px;border-radius:8px;border:0;background:#fff;color:#111;cursor:pointer}
+.vp-esp{flex:1}.vp-est{opacity:.75;font-size:13px}
+.vp-pags{flex:1;overflow:auto;padding:12px;-webkit-overflow-scrolling:touch}
+.vp-pags canvas{display:block;margin:0 auto 12px;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.4);-webkit-user-select:none;user-select:none}
+@media print{ body *{display:none!important} body::after{content:'Imprimir não é permitido no quiosque.';display:block;font:20px sans-serif;padding:40px} }</style>
 </head>
 <body>
 <div id="app"><div class="wrap"><div class="empty">A carregar…</div></div></div>
@@ -1939,10 +1946,55 @@ function planobar(p){
     el('div',{class:'pi'},'Plano ', el('b',{},p.codigo||p.artigo), p.variante?(' · '+p.variante):''),
     temPdf ? el('button',{class:'verplano',onclick:()=>verPlano(p)},'📄 Ver plano') : null); }
 // Os planos (desenhos) abrem por um fluxo PRIVADO trancado à pasta Planos (nunca vão em bruto para a web).
+// 29-10-2026 - a Sónia: "não quero que o quiosque tenha permissão para imprimir". Os planos já não abrem no leitor de PDF
+// do browser (que tem imprimir e descarregar): são desenhados aqui dentro, folha a folha (pdf.js), e a impressão do
+// quiosque sai em branco (@media print). Ctrl+P / Ctrl+S ficam bloqueados.
+const PDFJS_VER='3.11.174'; let _pdfjs=null;
+function carregarPdfjs(){
+  if(_pdfjs) return _pdfjs;
+  _pdfjs=new Promise((ok,ko)=>{ const s=document.createElement('script'); s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/'+PDFJS_VER+'/pdf.min.js';
+    s.onload=()=>{ try{ window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/'+PDFJS_VER+'/pdf.worker.min.js'; ok(window.pdfjsLib); }catch(e){ _pdfjs=null; ko(e); } };
+    s.onerror=()=>{ _pdfjs=null; ko(new Error('sem ligação ao leitor de planos')); }; document.head.appendChild(s); });
+  return _pdfjs; }
+// marca de água por cima de cada folha (sai em qualquer foto ou captura): quem, aparelho, data/hora
+function marcaDaguaTexto(){ let quem=''; try{ quem=(state.op&&state.op.nome)||''; if(!quem){ const ns=[]; (state.jobs||[]).forEach(j=>(j.workers||[]).forEach(w=>{ if(!w.endTs&&(w.opCurto||w.op)) ns.push(w.opCurto||w.op); })); quem=[...new Set(ns)].join(', '); } }catch(e){}
+  let ap=''; try{ ap=deviceName()||''; }catch(e){}
+  const d=new Date(), dh=d.toLocaleDateString('pt-PT')+' '+d.toLocaleTimeString('pt-PT',{hour:'2-digit',minute:'2-digit'});
+  return ['EMBARESA — USO INTERNO', [quem,ap,dh].filter(Boolean).join(' · ')]; }
+function marcaDagua(cv,linhas){ const g=cv.getContext('2d'), W=cv.width, H=cv.height, fs=Math.max(14,Math.round(W/34));
+  g.save(); g.translate(W/2,H/2); g.rotate(-Math.PI/7); g.font='bold '+fs+'px sans-serif'; g.textAlign='center'; g.fillStyle='rgba(190,0,0,0.16)';
+  const passoY=fs*5, passoX=Math.max(g.measureText(linhas[0]).width,g.measureText(linhas[1]||'').width)+fs*3, R=Math.hypot(W,H);
+  for(let y=-R;y<=R;y+=passoY){ const off=(Math.round(y/passoY)%2)*passoX/2; for(let x=-R;x<=R;x+=passoX){ g.fillText(linhas[0],x+off,y); if(linhas[1]) g.fillText(linhas[1],x+off,y+fs*1.3); } }
+  g.restore(); }async function abrirPlanoVisor(url,titulo){
+  const ov=document.createElement('div'); ov.className='visorplano';
+  ov.innerHTML='<div class="vp-barra"><b class="vp-tit"></b><span class="vp-est">a abrir…</span><span class="vp-esp"></span>'+
+    '<button data-z="-" title="Mais pequeno">−</button><button data-z="+" title="Maior">+</button><button data-a="fechar">✕ Fechar</button></div><div class="vp-pags"></div>';
+  ov.querySelector('.vp-tit').textContent=titulo||'Plano'; document.body.appendChild(ov);
+  const est=ov.querySelector('.vp-est'), pags=ov.querySelector('.vp-pags'); let zoom=1, doc=null, gen=0; const marca=marcaDaguaTexto();
+  ov.querySelector('[data-a=fechar]').onclick=()=>{ gen++; ov.remove(); if(doc){ try{ doc.destroy(); }catch(e){} } };
+  ov.addEventListener('contextmenu',e=>e.preventDefault());
+  async function desenhar(){ const g=++gen; pags.innerHTML='';
+    const larg=Math.max(300,pags.clientWidth-24)*zoom, dpr=Math.min(window.devicePixelRatio||1,2);
+    for(let i=1;i<=doc.numPages;i++){ if(g!==gen) return;
+      const pg=await doc.getPage(i), v0=pg.getViewport({scale:1}), vp=pg.getViewport({scale:larg/v0.width*dpr});
+      const cv=document.createElement('canvas'); cv.width=Math.floor(vp.width); cv.height=Math.floor(vp.height); cv.style.width=Math.floor(vp.width/dpr)+'px'; cv.style.height=Math.floor(vp.height/dpr)+'px';
+      pags.appendChild(cv); await pg.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise; marcaDagua(cv,marca);
+      if(g===gen) est.textContent='folha '+i+' de '+doc.numPages; }
+    if(g===gen) est.textContent=doc.numPages+' folhas'; }
+  ov.querySelectorAll('[data-z]').forEach(b=>b.onclick=()=>{ zoom=b.dataset.z==='+'?Math.min(zoom*1.4,4):Math.max(zoom/1.4,0.5); if(doc) desenhar(); });
+  // se a janela mudar de tamanho (rodar o tablet), as folhas voltam a ser desenhadas à largura nova
+  let tR=null; const onR=()=>{ clearTimeout(tR); tR=setTimeout(()=>{ if(doc&&document.body.contains(ov)) desenhar(); },300); }; window.addEventListener('resize',onR);
+  ov.querySelector('[data-a=fechar]').addEventListener('click',()=>window.removeEventListener('resize',onR));
+  try{ const lib=await carregarPdfjs(); const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error('erro '+r.status);
+    doc=await lib.getDocument({data:await r.arrayBuffer()}).promise; await desenhar(); }
+  catch(e){ est.textContent='Não consegui abrir o plano ('+((e&&e.message)||e)+').'; }
+}
+document.addEventListener('keydown',e=>{ const k=(e.key||'').toLowerCase();
+  if((e.ctrlKey||e.metaKey)&&(k==='p'||k==='s')){ e.preventDefault(); e.stopPropagation(); try{ toast('Imprimir não é permitido no quiosque.','warn'); }catch(x){} } },true);
 function verPlano(p){
   const base=(state.cfg&&state.cfg.urlPlanos)||'';
   const f=(p.ficheiro||'').replace(/\\/g,'/');
-  if(base&&f) window.open(base+'&f='+encodeURIComponent(f),'_blank');
+  if(base&&f) abrirPlanoVisor(base+'&f='+encodeURIComponent(f),'Plano '+(p.codigo||p.artigo||''));
   else toast('Planos indisponíveis neste dispositivo.','warn');
 }
 
