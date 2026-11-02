@@ -872,7 +872,7 @@ function confirmOp(){
   const op=state.pendingOp; if(!op){ state.view='pin'; return render(); }
   // 20-10: a avaliação do mês aparece sozinha depois do PIN (último dia útil do mês; ver avalMensal). Quem a acaba ou carrega em
   // "Agora não" segue para o que ia fazer — avalMensal deixa de a pedir (feita, ou adiada até amanhã).
-  if(!['pert','contagem','stock','transp','fechof2','jobaction','avalmes'].includes(state.intent)){ const am=avalMensal(op);
+  if(!['pert','contagem','stock','transp','fechof2','jobaction','avalmes'].includes(state.intent) || (janelaAval() && !['jobaction','avalmes','pert','fechof2'].includes(state.intent))){ const am=avalMensal(op);
     if(am){ state.op=op; state._ac={ mes:am.mes, pref:am.pref, teste:am.teste, modo:/rich[aá]u/i.test(String(op.nome||''))?null:'auto', colab:null, sel:{}, com:'', voltar:true }; state.view='avalchefia'; render(); return; } }
   if(!state._avisoOk && dstr(nowTs())<=AVISO_ATE && !['pert','contagem','stock','transp','fechof2','avalmes'].includes(state.intent)){ state.view='aviso'; return render(); }
   state._avisoOk=false;
@@ -1553,14 +1553,20 @@ function diaUtilCh(d){ const w=d.getDay(); return w!==0 && w!==6 && !ehFeriadoCh
 function ultimoDiaUtil(mes){ const [y,m]=mes.split('-').map(Number); const d=new Date(y,m,0,12); while(!diaUtilCh(d)) d.setDate(d.getDate()-1); return dstr(d.getTime()); }
 function nDiaUtil(iso){ const [y,m,dd]=iso.split('-').map(Number); let n=0; for(let i=1;i<=dd;i++){ if(diaUtilCh(new Date(y,m-1,i,12))) n++; } return n; }
 function lerAdiadoCh(){ try{ return JSON.parse(localStorage.getItem('q_aval_adiado')||'{}'); }catch(e){ return {}; } }
+// 30-10: config.avaliacaoJanela {de,ate:'AAAA-MM-DD', mes:'AAAA-MM', fora:[nomes]}: nesses dias a avaliação de "mes" abre a todos depois do PIN
+// (autoavaliação; o Rui também avalia a equipa), mesmo a quem vai para transporte, stock ou contagem. Os "fora" não fazem nem são avaliados.
+function cfgJanela(){ return (state.cfg&&state.cfg.avaliacaoJanela)||{}; }
+function janelaAval(){ const s=cfgJanela(), h=dstr(nowTs()); return !!(s.de&&s.ate&&s.mes&&h>=s.de&&h<=s.ate); }
+function equipaAval(){ const fora=cfgJanela().fora||[]; return ((state.cfg&&state.cfg.operadores)||[]).filter(p=>p.nome && !/rich[aá]u/i.test(p.nome) && !fora.includes(p.nome)); }
 function avalMensal(op){ const c=(state.cfg&&state.cfg.avaliacaoMensal)||{}; if(!op || op.admin) return null;
-  const teste=(c.testeDispositivos||[]).includes(deviceName()); if(!c.ativo && !teste) return null;
+  const so=janelaAval(); if(so && (cfgJanela().fora||[]).includes(op.nome)) return null;
+  const teste=!so && (c.testeDispositivos||[]).includes(deviceName()); if(!so && !c.ativo && !teste) return null;
   const hoje=dstr(nowTs()); let mes=null;
-  if(teste) mes=mesCh(0); else if(hoje>=ultimoDiaUtil(mesCh(0))) mes=mesCh(0); else if(nDiaUtil(hoje)<=(Number(c.diasDepois)||5)) mes=mesCh(-1);
+  if(so) mes=cfgJanela().mes; else if(teste) mes=mesCh(0); else if(hoje>=ultimoDiaUtil(mesCh(0))) mes=mesCh(0); else if(nDiaUtil(hoje)<=(Number(c.diasDepois)||5)) mes=mesCh(-1);
   if(!mes || lerAdiadoCh()[op.pin+'|'+hoje]) return null;
   const pref=teste?'TESTE-':'', cs=compChefia(), au=notasChefia(pref+'Auto',mes), fezAuto=cs.every(x=>au[op.nome+'|'+x.nome]);
   let faltaEq=0; if(/rich[aá]u/i.test(String(op.nome||''))){ const r=notasChefia(pref+'Rui',mes);
-    faltaEq=((state.cfg&&state.cfg.operadores)||[]).filter(p=>p.nome && !/rich[aá]u/i.test(p.nome) && !cs.every(x=>r[p.nome+'|'+x.nome])).length; }
+    faltaEq=equipaAval().filter(p=>!cs.every(x=>r[p.nome+'|'+x.nome])).length; }
   if(fezAuto && !faltaEq) return null; return { mes, teste, pref, fezAuto, faltaEq }; }
 function continuarDepoisAval(adiar){ const op=state.op;
   if(adiar && op){ const a=lerAdiadoCh(); a[op.pin+'|'+dstr(nowTs())]=1; try{ localStorage.setItem('q_aval_adiado',JSON.stringify(a)); }catch(e){} }
@@ -1572,7 +1578,7 @@ function renderAvalChefia(w){ const ehRui=/rich[aá]u/i.test(String((state.op&&s
   if(!A.modo){   // só o Rui chega aqui
     w.append(backbar('board','📝 Avaliação do mês — '+A.mes.slice(5)+'/'+A.mes.slice(0,4))); avisoTeste();
     if(A.voltar){ const au=notasChefia((A.pref||'')+'Auto',A.mes), r=notasChefia((A.pref||'')+'Rui',A.mes), cs=comps;
-      const pes=((state.cfg&&state.cfg.operadores)||[]).filter(p=>p.nome && !/rich[aá]u/i.test(p.nome)), feitos=pes.filter(p=>cs.every(x=>r[p.nome+'|'+x.nome])).length;
+      const pes=equipaAval(), feitos=pes.filter(p=>cs.every(x=>r[p.nome+'|'+x.nome])).length;
       w.append(el('p',{class:'muted',style:'margin:0 0 8px'},'Autoavaliação: '+(cs.every(x=>au[state.op.nome+'|'+x.nome])?'✅ feita':'por fazer')+' · Equipa: '+feitos+' de '+pes.length+' avaliados')); }
     w.append(el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin-top:6px'},
       el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:20px 18px;min-height:130px;border-left:6px solid #26c9e2',onclick:()=>{ A.modo='auto'; A.colab=null; render(); }},el('span',{style:'font-size:38px;line-height:1'},'🙋'),el('b',{style:'font-size:20px'},'A minha autoavaliação'),el('small',{style:'color:var(--soft)'},'como achas que estiveste este mês')),
@@ -1587,7 +1593,7 @@ function renderAvalChefia(w){ const ehRui=/rich[aá]u/i.test(String((state.op&&s
   if(!(state.cfg&&state.cfg.urlChefia)) w.append(el('div',{class:'flag'},'As respostas ficam guardadas neste aparelho e seguem para a nuvem logo que o envio esteja ligado.'));
   if(!A.colab){
     if(!A.voltar) w.append(mesBtns()); w.append(el('p',{class:'lbl'},'Toca na pessoa que vais avaliar'));
-    const pes=((state.cfg&&state.cfg.operadores)||[]).filter(p=>p.nome && !/rich[aá]u/i.test(p.nome)).slice().sort((a,b)=>String(a.seccao).localeCompare(String(b.seccao))||String(a.nome).localeCompare(String(b.nome)));
+    const pes=equipaAval().slice().sort((a,b)=>String(a.seccao).localeCompare(String(b.seccao))||String(a.nome).localeCompare(String(b.nome)));
     const g=el('div',{class:'cta-areas'}); let feitos=0;
     pes.forEach(p=>{ const n=comps.filter(c=>notas[p.nome+'|'+c.nome]).length; if(n===comps.length) feitos++;
       g.append(el('button',{class:'item',style:'border-left:6px solid '+(n===comps.length?'#22c55e':n?'#eab308':'#475569'),onclick:()=>{ A.colab=p.nome; A.carregado=null; render(); }},
