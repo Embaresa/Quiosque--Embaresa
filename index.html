@@ -1572,6 +1572,38 @@ function continuarDepoisAval(adiar){ const op=state.op;
   if(adiar && op){ const a=lerAdiadoCh(); a[op.pin+'|'+dstr(nowTs())]=1; try{ localStorage.setItem('q_aval_adiado',JSON.stringify(a)); }catch(e){} }
   state._ac=null; state.pendingOp=op; if(op) confirmOp(); else { state.view='board'; render(); } }
 setTimeout(()=>{ try{ loadChefiaNuvem(); }catch(e){} }, 8000); setInterval(()=>{ try{ loadChefiaNuvem(); }catch(e){} }, 10*60*1000);   // para saber quem já fez (noutro aparelho)
+// 02-11-2026: ela — "a folha da autoavaliação aparece no quiosque antes de fazer a autoavaliação e obriga a que eles coloquem um
+// certo em como leram e só depois do certo é que pode avançar". É o texto da folha 3-Documentacao\Autoavaliacao - como fazer.
+// Aparece sempre que se entra na autoavaliação; «▶ Começar» só funciona depois de «✅ Li e percebi». Fica registado 1×/pessoa/mês
+// na nuvem (Competencia "(leu a explicação)", Nota 0 — não é uma das 10 competências, por isso não entra em nenhuma conta).
+const LEU_CH='(leu a explicação)';
+function registarLeituraCh(A){ const nome=state.op&&state.op.nome; if(!nome) return; const av=(A.pref||'')+'Auto';
+  if(notasChefia(av,A.mes)[nome+'|'+LEU_CH]) return;
+  const q=loadChQ(); q.push({ ID:'CH-'+Date.now()+'-L', Mes:A.mes, Avaliador:av, Colaborador:nome, Competencia:LEU_CH, Nota:'0', Comentario:'confirmou no quiosque que leu a explicação', DataHora:new Date().toISOString(), Dispositivo:deviceName() });
+  saveChQ(q); syncChefia(); }
+function renderExplicaAuto(w,A,ehRui){
+  w.append(backbar('board','🙋 A minha autoavaliação — '+A.mes.slice(5)+'/'+A.mes.slice(0,4)));
+  if(A.teste) w.append(el('div',{class:'flag',style:'border-color:#7c3aed;color:#ddd6fe;background:#1e1536'},'🧪 MODO TESTE — só aparece neste aparelho; as respostas ficam marcadas como teste e não contam.'));
+  w.append(el('p',{class:'lbl',style:'font-size:22px;color:#26c9e2'},'📝 Antes de começares, lê isto'));
+  const itens=[
+    { ic:'🤔', t:'O que é?', s:'É a tua opinião sobre como trabalhaste no mês. Dás uma nota de 1 a 5 a 10 pontos do dia a dia: segurança, arrumação, trabalho em equipa…' },
+    { ic:'🎯', t:'Para que serve?', s:'Para a chefia saber como tu vês o teu trabalho e para falarmos sobre isso. Não é um teste: não há respostas certas nem erradas.' },
+    { ic:'🙂', t:'Sê sincero.', s:'Ninguém te vai criticar por dares uma nota baixa a ti próprio.' },
+    { ic:'👆', t:'Como se faz.', s:'Em cada um dos 10 pontos tocas num número de 1 a 5. Se quiseres, escreves um comentário. No fim tocas em «✅ Guardar a minha autoavaliação». Demora 2 a 3 minutos.' } ];
+  const l=el('div',{class:'list',style:'margin-bottom:12px'});
+  itens.forEach(x=>l.append(el('div',{class:'item',style:'align-items:flex-start;padding:14px 16px'},
+    el('span',{style:'font-size:32px;line-height:1;margin-right:12px'},x.ic), el('span',{class:'t'},el('b',{style:'font-size:18px'},x.t),el('small',{style:'font-size:15px;line-height:1.35'},x.s)))));
+  w.append(l);
+  const esc=el('div',{style:'display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:6px'});
+  for(let n=1;n<=5;n++) esc.append(el('div',{style:'border-radius:9px;padding:8px 4px;text-align:center;font-weight:800;font-size:18px;color:#fff;background:'+COR_CH[n]},String(n),el('small',{style:'display:block;font-size:11px;font-weight:600'},ESCALA_CH[n])));
+  w.append(esc, el('p',{class:'muted',style:'margin:0 0 12px'},'3 = cumpre o que é pedido. 4 e 5 quando foste além disso; 1 e 2 quando sabes que falhaste.'));
+  if(janelaAval()){ const ate=cfgJanela().ate; w.append(el('p',{class:'muted',style:'margin:-4px 0 12px'},'Podes fazê-la até '+ate.slice(8,10)+'/'+ate.slice(5,7)+'. Depois disso já não aparece.')); }
+  const ok=!!A.leuCheck;
+  w.append(el('button',{class:'item',style:'width:100%;justify-content:center;gap:12px;padding:18px;margin:4px 0 12px;border:2px solid '+(ok?'#22c55e':'#f5b52b')+';background:'+(ok?'#0f3b2c':'#2a2108'),onclick:()=>{ A.leuCheck=!A.leuCheck; render(); }},
+    el('span',{style:'font-size:32px;line-height:1'},ok?'✅':'⬜'), el('b',{style:'font-size:19px'},'Li e percebi o que é a autoavaliação')));
+  w.append(el('button',{class:'big ok',style:ok?'':'opacity:.45',onclick:()=>{ if(!A.leuCheck){ toast('Primeiro toca em «Li e percebi».','warn'); return; } A.leu=true; registarLeituraCh(A); render(); }},'▶  Começar a autoavaliação'));
+  if(A.voltar && !ehRui) w.append(el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>continuarDepoisAval(true)},'⏰  Agora não — lembrar amanhã'));
+}
 function renderAvalChefia(w){ const ehRui=/rich[aá]u/i.test(String((state.op&&state.op.nome)||''));
   const A=state._ac||(state._ac={mes:mesCh(0),modo:ehRui?null:'auto',colab:null,sel:{},com:'',pref:''}); const comps=compChefia();
   const avisoTeste=()=>{ if(A.teste) w.append(el('div',{class:'flag',style:'border-color:#7c3aed;color:#ddd6fe;background:#1e1536'},'🧪 MODO TESTE — só aparece neste aparelho; as respostas ficam marcadas como teste e não contam.')); };
@@ -1587,6 +1619,7 @@ function renderAvalChefia(w){ const ehRui=/rich[aá]u/i.test(String((state.op&&s
     return; }
   const auto=A.modo==='auto', avaliador=(A.pref||'')+(auto?'Auto':'Rui'), notas=notasChefia(avaliador,A.mes);
   if(auto) A.colab=state.op.nome;
+  if(auto && !A.leu) return renderExplicaAuto(w,A,ehRui);
   const sair=()=>{ if(ehRui){ A.modo=null; A.colab=null; render(); } else if(A.voltar){ continuarDepoisAval(false); } else { state._ac=null; state.op=null; state.view='board'; render(); } };
   const mesBtns=()=>el('div',{style:'display:flex;gap:8px;margin-bottom:10px'}, ...[0,-1].map(o=>el('button',{class:'item',style:'flex:1;justify-content:center;padding:12px;'+(A.mes===mesCh(o)?'border-color:#26c9e2;background:#0e2a33':''),onclick:()=>{ A.mes=mesCh(o); A.sel={}; A.carregado=null; render(); }},el('b',{},o===0?'Este mês':'Mês passado'))));
   w.append(backbar('board',(auto?'🙋 A minha autoavaliação':'👥 Avaliar a equipa')+' — '+A.mes.slice(5)+'/'+A.mes.slice(0,4))); avisoTeste();
