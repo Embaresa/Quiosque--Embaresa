@@ -72,7 +72,9 @@
   .plano .pt.esp{background:#2a2410;border-color:#6b5a1e;opacity:.75} .plano .pturno.esp{background:#3b2f0b;color:#f5d27a}
   .plano .pturno{margin:10px 0 6px;padding:4px 10px;border-radius:8px;background:#162b20;color:#9fd5b8;font-size:13px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
   .plano .pturno.agora{background:#34d399;color:#05261a}
-  @media(max-width:900px){ .boardsplit{grid-template-columns:1fr} .plano{border-right:0;border-bottom:2px solid #1f4a37;max-height:45vh} }
+  /* 03-11: ela — "sim, põe ao lado" (no tablet o plano ficava por cima). Ao lado até 560 px, com a coluna mais estreita; por cima só nos telemóveis */
+  @media(max-width:900px){ .boardsplit{grid-template-columns:minmax(230px,36%) 1fr} .plano{padding:10px 10px 24px} .plano h2{font-size:19px} .plano .pt{padding:10px 11px} .plano .pt b{font-size:18px} .boardsplit .cta-areas{grid-template-columns:repeat(2,minmax(0,1fr))} .boardsplit .cta-areas .item{min-width:0;gap:8px;padding:12px 10px} .boardsplit .cta-areas .item span{font-size:26px} .boardsplit .cta-areas .item b{font-size:15px;overflow-wrap:anywhere} }
+  @media(max-width:560px){ .boardsplit{grid-template-columns:1fr} .plano{border-right:0;border-bottom:2px solid #1f4a37;max-height:45vh} }
   .cta{flex:none;padding:14px 16px 12px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--panel),transparent)}
   .cta .ctahd{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--soft);margin:2px 0 0}
   .cta-areas{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
@@ -873,7 +875,9 @@ function confirmOp(){
   // 20-10: a avaliação do mês aparece sozinha depois do PIN (último dia útil do mês; ver avalMensal). Quem a acaba ou carrega em
   // "Agora não" segue para o que ia fazer — avalMensal deixa de a pedir (feita, ou adiada até amanhã).
   if(!['pert','contagem','stock','transp','fechof2','jobaction','avalmes'].includes(state.intent) || (janelaAval() && !['jobaction','avalmes','pert','fechof2'].includes(state.intent))){ const am=avalMensal(op);
-    if(am){ state.op=op; state._ac={ mes:am.mes, pref:am.pref, teste:am.teste, modo:/rich[aá]u/i.test(String(op.nome||''))?null:'auto', colab:null, sel:{}, com:'', voltar:true }; state.view='avalchefia'; render(); return; } }
+    if(am){ state.op=op; state._ac={ mes:am.mes, pref:am.pref, teste:am.teste, modo:/rich[aá]u/i.test(String(op.nome||''))?null:'auto', colab:null, sel:{}, com:'', voltar:true }; state.view='avalchefia'; render();
+      loadChefiaNuvem().then(()=>{ if(state.view==='avalchefia' && state.op===op && state._ac && state._ac.voltar && !avalMensal(op)) continuarDepoisAval(false); });   // 03-11: já a fez noutro aparelho
+      return; } }
   if(!state._avisoOk && dstr(nowTs())<=AVISO_ATE && !['pert','contagem','stock','transp','fechof2','avalmes'].includes(state.intent)){ state.view='aviso'; return render(); }
   state._avisoOk=false;
   state.op=op; state.area=areaUnidades(op); state.allowedArt=artigosDaArea();
@@ -1563,14 +1567,22 @@ function avalMensal(op){ const c=(state.cfg&&state.cfg.avaliacaoMensal)||{}; if(
   const teste=!so && (c.testeDispositivos||[]).includes(deviceName()); if(!so && !c.ativo && !teste) return null;
   const hoje=dstr(nowTs()); let mes=null;
   if(so) mes=cfgJanela().mes; else if(teste) mes=mesCh(0); else if(hoje>=ultimoDiaUtil(mesCh(0))) mes=mesCh(0); else if(nDiaUtil(hoje)<=(Number(c.diasDepois)||5)) mes=mesCh(-1);
-  if(!mes || lerAdiadoCh()[op.pin+'|'+hoje]) return null;
+  if(!mes) return null;
   const pref=teste?'TESTE-':'', cs=compChefia(), au=notasChefia(pref+'Auto',mes), fezAuto=cs.every(x=>au[op.nome+'|'+x.nome]);
+  if(lerAdiadoCh()[op.pin+'|'+hoje] && (teste || fezAuto)) return null;   // 03-11: «adiar» só no teste ou para o Rui com a dele feita (falta a equipa)
   let faltaEq=0; if(/rich[aá]u/i.test(String(op.nome||''))){ const r=notasChefia(pref+'Rui',mes);
     faltaEq=equipaAval().filter(p=>!cs.every(x=>r[p.nome+'|'+x.nome])).length; }
   if(fezAuto && !faltaEq) return null; return { mes, teste, pref, fezAuto, faltaEq }; }
 function continuarDepoisAval(adiar){ const op=state.op;
   if(adiar && op){ const a=lerAdiadoCh(); a[op.pin+'|'+dstr(nowTs())]=1; try{ localStorage.setItem('q_aval_adiado',JSON.stringify(a)); }catch(e){} }
   state._ac=null; state.pendingOp=op; if(op) confirmOp(); else { state.view='board'; render(); } }
+// 03-11-2026: ela — "abrimos até ao dia 6 e a partir de agora quando introduzirem o pin tens que explicar o que devem fazer e não
+// deixar avançar enquanto não gravarem". Fora do modo teste já não há «Agora não»: só se começa a trabalhar depois de guardar a
+// autoavaliação (o Rui: a dele; a equipa pode ficar para outro PIN dentro da janela). Quem pôs o PIN por engano pode sair (volta ao
+// ecrã principal sem começar nada). Fechar/pausar trabalhos, paragens e F2 continuam livres (confirmOp não pede a avaliação).
+function obrigAval(A){ return !!(A && A.voltar && !A.teste); }
+function avisoObrigAval(w){ w.append(el('div',{class:'flag',style:'border-color:#f5b52b;color:#fde68a;background:#2a2108;font-size:17px;line-height:1.35'},'⚠️ Antes de começares a trabalhar tens de fazer a tua autoavaliação. Só depois de a guardares é que podes avançar.')); }
+function btnSairAval(){ return el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>{ state._ac=null; state.op=null; state.pendingOp=null; state.pinbuf=''; state.view='board'; render(); }},'‹  Sair sem começar o trabalho'); }
 setTimeout(()=>{ try{ loadChefiaNuvem(); }catch(e){} }, 8000); setInterval(()=>{ try{ loadChefiaNuvem(); }catch(e){} }, 10*60*1000);   // para saber quem já fez (noutro aparelho)
 // 02-11-2026: ela — "a folha da autoavaliação aparece no quiosque antes de fazer a autoavaliação e obriga a que eles coloquem um
 // certo em como leram e só depois do certo é que pode avançar". É o texto da folha 3-Documentacao\Autoavaliacao - como fazer.
@@ -1584,6 +1596,7 @@ function registarLeituraCh(A){ const nome=state.op&&state.op.nome; if(!nome) ret
 function renderExplicaAuto(w,A,ehRui){
   w.append(backbar('board','🙋 A minha autoavaliação — '+A.mes.slice(5)+'/'+A.mes.slice(0,4)));
   if(A.teste) w.append(el('div',{class:'flag',style:'border-color:#7c3aed;color:#ddd6fe;background:#1e1536'},'🧪 MODO TESTE — só aparece neste aparelho; as respostas ficam marcadas como teste e não contam.'));
+  if(obrigAval(A)) avisoObrigAval(w);
   w.append(el('p',{class:'lbl',style:'font-size:22px;color:#26c9e2'},'📝 Antes de começares, lê isto'));
   const itens=[
     { ic:'🤔', t:'O que é?', s:'É a tua opinião sobre como trabalhaste no mês. Dás uma nota de 1 a 5 a 10 pontos do dia a dia: segurança, arrumação, trabalho em equipa…' },
@@ -1602,7 +1615,7 @@ function renderExplicaAuto(w,A,ehRui){
   w.append(el('button',{class:'item',style:'width:100%;justify-content:center;gap:12px;padding:18px;margin:4px 0 12px;border:2px solid '+(ok?'#22c55e':'#f5b52b')+';background:'+(ok?'#0f3b2c':'#2a2108'),onclick:()=>{ A.leuCheck=!A.leuCheck; render(); }},
     el('span',{style:'font-size:32px;line-height:1'},ok?'✅':'⬜'), el('b',{style:'font-size:19px'},'Li e percebi o que é a autoavaliação')));
   w.append(el('button',{class:'big ok',style:ok?'':'opacity:.45',onclick:()=>{ if(!A.leuCheck){ toast('Primeiro toca em «Li e percebi».','warn'); return; } A.leu=true; registarLeituraCh(A); render(); }},'▶  Começar a autoavaliação'));
-  if(A.voltar && !ehRui) w.append(el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>continuarDepoisAval(true)},'⏰  Agora não — lembrar amanhã'));
+  if(A.voltar && !ehRui) w.append(obrigAval(A)?btnSairAval():el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>continuarDepoisAval(true)},'⏰  Agora não — lembrar amanhã'));
 }
 function renderAvalChefia(w){ const ehRui=/rich[aá]u/i.test(String((state.op&&state.op.nome)||''));
   const A=state._ac||(state._ac={mes:mesCh(0),modo:ehRui?null:'auto',colab:null,sel:{},com:'',pref:''}); const comps=compChefia();
@@ -1615,14 +1628,16 @@ function renderAvalChefia(w){ const ehRui=/rich[aá]u/i.test(String((state.op&&s
     w.append(el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin-top:6px'},
       el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:20px 18px;min-height:130px;border-left:6px solid #26c9e2',onclick:()=>{ A.modo='auto'; A.colab=null; render(); }},el('span',{style:'font-size:38px;line-height:1'},'🙋'),el('b',{style:'font-size:20px'},'A minha autoavaliação'),el('small',{style:'color:var(--soft)'},'como achas que estiveste este mês')),
       el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:20px 18px;min-height:130px;border-left:6px solid #f2617a',onclick:()=>{ A.modo='equipa'; A.colab=null; render(); }},el('span',{style:'font-size:38px;line-height:1'},'👥'),el('b',{style:'font-size:20px'},'Avaliar a equipa'),el('small',{style:'color:var(--soft)'},'o comportamento de cada pessoa no mês'))));
-    if(A.voltar) w.append(el('button',{class:'big ghost',style:'margin-top:14px',onclick:()=>continuarDepoisAval(true)},'▶  Continuar para o trabalho (volta a aparecer amanhã)'));
+    if(A.voltar){ const fez=comps.every(x=>notasChefia((A.pref||'')+'Auto',A.mes)[state.op.nome+'|'+x.nome]);
+      if(obrigAval(A) && !fez){ avisoObrigAval(w); w.append(btnSairAval()); }
+      else w.append(el('button',{class:'big ghost',style:'margin-top:14px',onclick:()=>continuarDepoisAval(true)},'▶  Continuar para o trabalho (volta a aparecer amanhã)')); }
     return; }
   const auto=A.modo==='auto', avaliador=(A.pref||'')+(auto?'Auto':'Rui'), notas=notasChefia(avaliador,A.mes);
   if(auto) A.colab=state.op.nome;
   if(auto && !A.leu) return renderExplicaAuto(w,A,ehRui);
   const sair=()=>{ if(ehRui){ A.modo=null; A.colab=null; render(); } else if(A.voltar){ continuarDepoisAval(false); } else { state._ac=null; state.op=null; state.view='board'; render(); } };
   const mesBtns=()=>el('div',{style:'display:flex;gap:8px;margin-bottom:10px'}, ...[0,-1].map(o=>el('button',{class:'item',style:'flex:1;justify-content:center;padding:12px;'+(A.mes===mesCh(o)?'border-color:#26c9e2;background:#0e2a33':''),onclick:()=>{ A.mes=mesCh(o); A.sel={}; A.carregado=null; render(); }},el('b',{},o===0?'Este mês':'Mês passado'))));
-  w.append(backbar('board',(auto?'🙋 A minha autoavaliação':'👥 Avaliar a equipa')+' — '+A.mes.slice(5)+'/'+A.mes.slice(0,4))); avisoTeste();
+  w.append(backbar('board',(auto?'🙋 A minha autoavaliação':'👥 Avaliar a equipa')+' — '+A.mes.slice(5)+'/'+A.mes.slice(0,4))); avisoTeste(); if(auto && obrigAval(A)) avisoObrigAval(w);
   if(!(state.cfg&&state.cfg.urlChefia)) w.append(el('div',{class:'flag'},'As respostas ficam guardadas neste aparelho e seguem para a nuvem logo que o envio esteja ligado.'));
   if(!A.colab){
     if(!A.voltar) w.append(mesBtns()); w.append(el('p',{class:'lbl'},'Toca na pessoa que vais avaliar'));
@@ -1649,7 +1664,7 @@ function renderAvalChefia(w){ const ehRui=/rich[aá]u/i.test(String((state.op&&s
       const q=loadChQ(), t=new Date().toISOString(); comps.forEach((c,i)=>q.push({ ID:'CH-'+Date.now()+'-'+i, Mes:A.mes, Avaliador:avaliador, Colaborador:A.colab, Competencia:c.nome, Nota:String(A.sel[c.nome]), Comentario:A.com||'', DataHora:t, Dispositivo:deviceName() }));
       saveChQ(q); syncChefia(); toast(auto?'Obrigado — a tua autoavaliação ficou guardada ✅':'Avaliação de '+curto(A.colab)+' guardada ✅','ok');
       if(auto) sair(); else { A.colab=null; render(); } }}, falta?('Faltam '+falta):(auto?'✅  Guardar a minha autoavaliação':'✅  Guardar avaliação')));
-  if(auto && A.voltar && !ehRui) w.append(el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>continuarDepoisAval(true)},'⏰  Agora não — lembrar amanhã'));
+  if(auto && A.voltar && !ehRui) w.append(obrigAval(A)?btnSairAval():el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>continuarDepoisAval(true)},'⏰  Agora não — lembrar amanhã'));
   else w.append(el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>{ if(auto) sair(); else { A.colab=null; render(); } }},auto?'‹  Voltar':'‹  Voltar à lista')); }
 /* ---- 16-10: COMPONENTES PARA STOCK. Ela: "ponho um colaborador a montar cunhas e forrá-las mas tanto servem para esquerdo como
    para direito". Preparar componentes comuns passa a ser um trabalho à parte, contado em JOGOS (1 jogo = componentes de 1 caixa),
