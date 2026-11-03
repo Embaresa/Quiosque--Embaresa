@@ -1811,8 +1811,16 @@ function entregasDoQuadro(){ const hoje=dstr(nowTs()), lim=dstr(nowTs()-14*864e5
   return (state.enc||[]).filter(e=>e.entrega && e.entrega<=hoje && e.entrega>=lim && !/entregue|embalada/i.test(e.estado||'')).sort((a,b)=>String(a.entrega).localeCompare(String(b.entrega)))
     .map(e=>({ id:'ENT-'+e.serie, dia:e.entrega, area:'log', artigo:e.artigo, serie:e.serie, operacao:'🚚 Entregar à ANN'+(e.po?' · PO '+e.po+(e.pos?'/'+e.pos:''):''), turno:'', _entrega:true,
       _vem:e.entrega<hoje?e.entrega:undefined, _emTr:emTr.has(String(e.serie).toUpperCase()) })); }
+// 03-11-2026: ela — «no pc aparecem coisas dos dias anteriores que já estão acabadas» (EM2627: soldadura nunca dada como acabada, mas
+// já montada a 29-10 e «produzida» nas Encomendas). Como no Painel e no quadro.html (02-11): se a caixa já tem trabalho registado na folha
+// Fases numa operação MAIS À FRENTE (soldadura < montagem < embalamento), esta tarefa conta como feita.
+const rkOpQ=o=>/embal/i.test(o)?3:/montag/i.test(o)?2:/soldad/i.test(o)?1:0;
+function jaMaisAFrenteQ(t){ const rk=rkOpQ(String(t.operacao||'')); if(!rk || !t.serie) return false; const s=String(t.serie).trim().toUpperCase(), a=String(t.artigo||'').trim().toLowerCase();
+  return lerFases().concat(state._fasesNuvem||[]).some(r=>String(r.Serie||'').trim().toUpperCase()===s && String(r.Artigo||'').trim().toLowerCase()===a
+    && rkOpQ(String(r.Operacao||''))>rk && !/^(STK.|ESTR|LIG|USO|MI|COMP|ESPERA|ESPERA-FIM)$/.test(String(r.Fase||''))); }
 function estadoTarefaQ(t){ try{ if(t._entrega) return t._emTr?'run':''; if(!t.serie) return ''; const fl=fluxoDoArtigo(t.artigo);
   if(fl){ const f=faseDaOperacao(fl,t.artigo,t.serie,t.operacao); if(f && fasesConcluidas(t.artigo,t.serie).has(f.id)) return 'ok'; }
+  if(jaMaisAFrenteQ(t)) return 'ok';
   return historicoDaSerie(t.artigo,t.serie).some(x=>x.op===t.operacao)?'run':''; }catch(e){ return ''; } }
 // 21-10: o PLANO DE TRABALHOS à esquerda do ecrã principal (todas as áreas). Tocar numa tarefa → PIN → começa com a caixa escolhida.
 // 21-10: ela — "não faz sentido verem tudo: no tablet da soldadura vêm o plano da soldadura, nas montagens a montagem…" e "só eu vejo
