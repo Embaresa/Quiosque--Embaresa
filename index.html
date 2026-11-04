@@ -500,6 +500,7 @@ function render(){
     else if(state.view==='confcx') renderConfCaixa(w);
     else if(state.view==='aviso') renderAvisoNovidades(w);
     else if(state.view==='avalchefia') renderAvalChefia(w);
+    else if(state.view==='resultado') renderResultadoAval(w);   // 04-11
     else if(state.view==='logistica') renderLogistica(w);
     else if(state.view==='percurso') renderPercurso(w);
     else if(state.view==='artigo') renderArtigo(w);
@@ -874,10 +875,14 @@ function confirmOp(){
   const op=state.pendingOp; if(!op){ state.view='pin'; return render(); }
   // 20-10: a avaliação do mês aparece sozinha depois do PIN (último dia útil do mês; ver avalMensal). Quem a acaba ou carrega em
   // "Agora não" segue para o que ia fazer — avalMensal deixa de a pedir (feita, ou adiada até amanhã).
-  if(!['pert','contagem','stock','transp','fechof2','jobaction','avalmes'].includes(state.intent) || (janelaAval() && !['jobaction','avalmes','pert','fechof2'].includes(state.intent))){ const am=avalMensal(op);
+  // 04-11: ela — «o Hugo ainda não fez» → fazia tudo como «⏸ Registar paragem» (Organização & Movimentação), que ficava de fora.
+  // A paragem começada no ecrã principal passa a pedir a avaliação; as pausas a meio de um trabalho (jobaction) continuam livres.
+  if(!['contagem','stock','transp','fechof2','jobaction','avalmes'].includes(state.intent) || (janelaAval() && !['jobaction','avalmes','fechof2'].includes(state.intent))){ const am=avalMensal(op);
     if(am){ state.op=op; state._ac={ mes:am.mes, pref:am.pref, teste:am.teste, modo:/rich[aá]u/i.test(String(op.nome||''))?null:'auto', colab:null, sel:{}, com:'', voltar:true }; state.view='avalchefia'; render();
       loadChefiaNuvem().then(()=>{ if(state.view==='avalchefia' && state.op===op && state._ac && state._ac.voltar && !avalMensal(op)) continuarDepoisAval(false); });   // 03-11: já a fez noutro aparelho
       return; } }
+  // 04-11: o resultado da avaliação, no dia que ela definiu, uma só vez (ver resultadoPorLer)
+  if(!['jobaction','avalmes','fechof2'].includes(state.intent)){ const rs=resultadoPorLer(op); if(rs){ state.op=op; state._rs=rs; state.view='resultado'; render(); return; } }
   if(!state._avisoOk && dstr(nowTs())<=AVISO_ATE && !['pert','contagem','stock','transp','fechof2','avalmes'].includes(state.intent)){ state.view='aviso'; return render(); }
   state._avisoOk=false;
   state.op=op; state.area=areaUnidades(op); state.allowedArt=artigosDaArea();
@@ -1587,6 +1592,31 @@ function continuarDepoisAval(adiar){ const op=state.op;
 // ecrã principal sem começar nada). Fechar/pausar trabalhos, paragens e F2 continuam livres (confirmOp não pede a avaliação).
 function obrigAval(A){ return !!(A && A.voltar && !A.teste); }
 function avisoObrigAval(w){ w.append(el('div',{class:'flag',style:'border-color:#f5b52b;color:#fde68a;background:#2a2108;font-size:17px;line-height:1.35'},'⚠️ Antes de começares a trabalhar tens de fazer a tua autoavaliação. Só depois de a guardares é que podes avançar.')); }
+// 04-11-2026: RESULTADO DA AVALIAÇÃO. Ela: «o resultado vai ficar visível para cada um apenas no dia que eu definir … na 2.ªF dia 9
+// fica visível e só é visto uma vez, não aparece mais, e tens que colocar uma nota que se quiser aprofundar fala com a chefia» e
+// «não quero que imprimam ou partilhem; se quiserem cópia têm que pedir». Tudo na TabAvalChefia (nuvem): o texto = Avaliador
+// "Mensagem" (chefia.html, «Guardar texto»); o dia = Avaliador "Abertura", Comentario AAAA-MM-DD (vale a mais recente do mês; vazio =
+// fechado); quem já leu = Avaliador "Lido" (escrito aqui ao tocar em «Li»). Aparece depois do PIN (não nas pausas a meio de um
+// trabalho nem no F2), sem botão de voltar, sem copiar nem imprimir.
+function resultadoPorLer(op){ if(!op||op.admin||!op.nome) return null; const hoje=dstr(nowTs()), ab={}, msg={}, lido={};
+  (state._chNuvem||[]).concat(loadChQ()).forEach(r=>{ const av=String(r.Avaliador), m=String(r.Mes);
+    if(av==='Abertura'){ if(!ab[m]||String(r.DataHora)>String(ab[m].DataHora)) ab[m]=r; return; }
+    if(String(r.Colaborador)!==op.nome) return;
+    if(av==='Mensagem'){ if(!msg[m]||String(r.DataHora)>String(msg[m].DataHora)) msg[m]=r; }
+    else if(av==='Lido') lido[m]=1; });
+  const ms=Object.keys(msg).filter(m=>{ const d=ab[m]?String(ab[m].Comentario||'').slice(0,10):''; return d && d<=hoje && !lido[m] && String(msg[m].Comentario||'').trim(); }).sort().reverse();
+  return ms.length?{ mes:ms[0], texto:String(msg[ms[0]].Comentario).replace(/\r/g,'') }:null; }
+(function(){ try{ const s=document.createElement('style'); s.textContent='@media print{ body:has(.resaval){ display:none !important } } .resaval{ -webkit-user-select:none; user-select:none; -webkit-touch-callout:none }'; document.head.append(s); }catch(e){}
+  document.addEventListener('keydown',e=>{ if(state.view==='resultado' && (e.ctrlKey||e.metaKey) && /^[pcsa]$/i.test(e.key)){ e.preventDefault(); toast('Não é possível imprimir nem copiar. Se quiseres uma cópia, pede à chefia.','warn'); } }, true); })();
+function renderResultadoAval(w){ const rs=state._rs, op=state.op; if(!rs||!op){ state.view='board'; return render(); }
+  const MESES=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'], [y,m]=rs.mes.split('-').map(Number);
+  w.append(el('p',{class:'lbl',style:'font-size:24px;color:#26c9e2;margin-top:6px'},'📬 O resultado da tua avaliação — '+MESES[m-1]+' de '+y));
+  w.append(el('div',{class:'flag',style:'border-color:#7c3aed;color:#ddd6fe;background:#1e1536;font-size:16px;line-height:1.4'},'🔒 Este resultado é só para ti e só aparece esta vez. Não pode ser impresso, copiado nem partilhado. Se quiseres uma cópia, pede à chefia.'));
+  w.append(el('div',{class:'resaval',oncontextmenu:e=>{ e.preventDefault(); },oncopy:e=>{ e.preventDefault(); },ondragstart:e=>{ e.preventDefault(); },style:'white-space:pre-wrap;background:var(--card,#122230);border:1px solid var(--line);border-radius:12px;padding:16px 18px;font-size:18px;line-height:1.5;margin:10px 0'},rs.texto));
+  w.append(el('div',{class:'flag',style:'border-color:#1f7a57;color:#bbf7d0;background:#0f3b2c;font-size:18px;line-height:1.4'},'💬 Se quiseres falar mais sobre a tua avaliação, fala com a chefia.'));
+  w.append(el('button',{class:'big ok',style:'margin-top:10px',onclick:()=>{ const q=loadChQ(); q.push({ ID:'CH-'+Date.now()+'-V', Mes:rs.mes, Avaliador:'Lido', Colaborador:op.nome, Competencia:'(mensagem)', Nota:'0', Comentario:'leu o resultado no quiosque', DataHora:new Date().toISOString(), Dispositivo:deviceName() });
+      saveChQ(q); syncChefia(); state._rs=null; state.pendingOp=op; confirmOp(); }},'✅  Li — continuar'));
+  w.append(el('p',{class:'muted',style:'text-align:center;margin-top:6px'},'Depois de tocares em «Li» este resultado não volta a aparecer.')); }
 function btnSairAval(){ return el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>{ state._ac=null; state.op=null; state.pendingOp=null; state.pinbuf=''; state.view='board'; render(); }},'‹  Sair sem começar o trabalho'); }
 setTimeout(()=>{ try{ loadChefiaNuvem(); }catch(e){} }, 8000); setInterval(()=>{ try{ loadChefiaNuvem(); }catch(e){} }, 10*60*1000);   // para saber quem já fez (noutro aparelho)
 // 02-11-2026: ela — "a folha da autoavaliação aparece no quiosque antes de fazer a autoavaliação e obriga a que eles coloquem um
@@ -1607,7 +1637,9 @@ function renderExplicaAuto(w,A,ehRui){
     { ic:'🤔', t:'O que é?', s:'É a tua opinião sobre como trabalhaste no mês. Dás uma nota de 1 a 5 a 10 pontos do dia a dia: segurança, arrumação, trabalho em equipa…' },
     { ic:'🎯', t:'Para que serve?', s:'Para a chefia saber como tu vês o teu trabalho e para falarmos sobre isso. Não é um teste: não há respostas certas nem erradas.' },
     { ic:'🙂', t:'Sê sincero.', s:'Ninguém te vai criticar por dares uma nota baixa a ti próprio.' },
-    { ic:'👆', t:'Como se faz.', s:'Em cada um dos 10 pontos tocas num número de 1 a 5. Se quiseres, escreves um comentário. No fim tocas em «✅ Guardar a minha autoavaliação». Demora 2 a 3 minutos.' } ];
+    { ic:'👆', t:'Como se faz.', s:'Em cada um dos 10 pontos tocas num número de 1 a 5. Se quiseres, escreves um comentário. No fim tocas em «✅ Guardar a minha autoavaliação». Demora 2 a 3 minutos.' },
+    // 04-11: ela — «as autoavaliações de 5 são complicadas» → critérios do 5 (config.competenciasChefia[].excelente / .nao5, do Excel 3-Documentacao\Criterios Avaliacao Qualitativa.xlsx)
+    { ic:'⭐', t:'O 5 é exigente.', s:'5 (Excelente) é só para quem cumpre tudo, o mês inteiro, sem nenhuma falha. Quando tocares no 5 aparece o que é preciso e tens de confirmar.' } ];
   const l=el('div',{class:'list',style:'margin-bottom:12px'});
   itens.forEach(x=>l.append(el('div',{class:'item',style:'align-items:flex-start;padding:14px 16px'},
     el('span',{style:'font-size:32px;line-height:1;margin-right:12px'},x.ic), el('span',{class:'t'},el('b',{style:'font-size:18px'},x.t),el('small',{style:'font-size:15px;line-height:1.35'},x.s)))));
@@ -1653,18 +1685,26 @@ function renderAvalChefia(w){ const ehRui=/rich[aá]u/i.test(String((state.op&&s
         el('span',{},n===comps.length?'✅':n?'🟡':'⬜'), el('b',{},curto(p.nome), el('small',{style:'display:block;color:var(--soft);font-weight:400'},String(p.seccao||'')+(n===comps.length?' · avaliado':n?' · '+n+'/'+comps.length:''))))); });
     w.append(el('p',{class:'muted',style:'margin:0 0 8px'},feitos+' de '+pes.length+' avaliados neste mês')); w.append(g);
     w.append(el('button',{class:'big ghost',style:'margin-top:12px',onclick:sair},'‹  Voltar')); return; }
-  if(A.carregado!==A.colab+'|'+A.mes){ A.carregado=A.colab+'|'+A.mes; A.sel={}; A.com=''; comps.forEach(c=>{ const r=notas[A.colab+'|'+c.nome]; if(r){ A.sel[c.nome]=Number(r.Nota); if(r.Comentario) A.com=r.Comentario; } }); }
+  if(A.carregado!==A.colab+'|'+A.mes){ A.carregado=A.colab+'|'+A.mes; A.sel={}; A.com=''; A.conf5={}; comps.forEach(c=>{ const r=notas[A.colab+'|'+c.nome]; if(r){ A.sel[c.nome]=Number(r.Nota); if(A.sel[c.nome]===5) A.conf5[c.nome]=true; if(r.Comentario) A.com=r.Comentario; } }); }
   if(auto && !A.voltar) w.append(mesBtns());
   w.append(el('p',{class:'lbl',style:'font-size:20px'},auto?'Como achas que estiveste?':A.colab));
   w.append(el('p',{class:'muted',style:'margin:-6px 0 10px'},'1 '+ESCALA_CH[1]+' · 2 '+ESCALA_CH[2]+' · 3 '+ESCALA_CH[3]+' · 4 '+ESCALA_CH[4]+' · 5 '+ESCALA_CH[5]));
   comps.forEach(c=>{ const v=A.sel[c.nome]; const linha=el('div',{style:'background:var(--card,#122230);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px'});
     linha.append(el('b',{style:'font-size:16px'},c.nome), el('small',{style:'display:block;color:var(--soft);margin-bottom:6px'},c.obs||''));
     const bs=el('div',{style:'display:grid;grid-template-columns:repeat(5,1fr);gap:6px'});
-    for(let n=1;n<=5;n++) bs.append(el('button',{style:'padding:10px 4px;border-radius:9px;font-weight:800;font-size:17px;color:#fff;background:'+(v===n?COR_CH[n]:'#1b2b38')+';border:2px solid '+(v===n?'#fff':'transparent'),onclick:()=>{ A.sel[c.nome]=n; render(); }},
+    for(let n=1;n<=5;n++) bs.append(el('button',{style:'padding:10px 4px;border-radius:9px;font-weight:800;font-size:17px;color:#fff;background:'+(v===n?COR_CH[n]:'#1b2b38')+';border:2px solid '+(v===n?'#fff':'transparent'),onclick:()=>{ A.sel[c.nome]=n; if(n===5){ A.conf5=A.conf5||{}; A.conf5[c.nome]=false; } render(); }},
       String(n), el('small',{style:'display:block;font-size:11px;font-weight:600;opacity:.9'},ESCALA_CH[n])));
-    linha.append(bs); w.append(linha); });
+    linha.append(bs);
+    if(v===5 && c.excelente){ const ok=!!(A.conf5||{})[c.nome], box=el('div',{style:'margin-top:8px;border:2px solid '+(ok?'#2563eb':'#f5b52b')+';background:'+(ok?'#0f1d3a':'#2a2108')+';border-radius:10px;padding:10px 12px;font-size:15px;line-height:1.4'});
+      box.append(el('b',{style:'display:block;margin-bottom:4px'},'⭐ Para '+(auto?'teres':'dar')+' 5 tem de ser verdade TUDO isto, o mês inteiro:'), el('div',{},c.excelente), c.nao5?el('div',{style:'margin-top:6px;color:#fca5a5'},'Não é 5 se: '+c.nao5.charAt(0).toLowerCase()+c.nao5.slice(1)):null);
+      if(!ok) box.append(el('div',{style:'display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px'},
+        el('button',{style:'padding:12px;border-radius:9px;font-weight:800;font-size:16px;color:#fff;background:#2563eb;border:0',onclick:()=>{ A.conf5[c.nome]=true; render(); }},auto?'✅ Sim, cumpri tudo isto':'✅ Sim, cumpriu tudo isto'),
+        el('button',{style:'padding:12px;border-radius:9px;font-weight:800;font-size:16px;color:#fff;background:#22c55e;border:0',onclick:()=>{ A.sel[c.nome]=4; render(); }},'Fica 4 (Bom)')));
+      else box.append(el('div',{style:'margin-top:6px;color:#93c5fd;font-weight:700'},'✔ Confirmado'));
+      linha.append(box); }
+    w.append(linha); });
   const ta=el('textarea',{rows:2,placeholder:auto?'queres dizer alguma coisa? (opcional)':'comentário (opcional)',style:'width:100%;margin:4px 0 10px;background:var(--card2);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit'}); ta.value=A.com||''; ta.oninput=()=>{ A.com=ta.value; }; w.append(ta);
-  const falta=comps.filter(c=>!A.sel[c.nome]).length;
+  const falta=comps.filter(c=>!A.sel[c.nome] || (A.sel[c.nome]===5 && c.excelente && !(A.conf5||{})[c.nome])).length;   // 04-11: um 5 por confirmar conta como por responder
   w.append(el('button',{class:'big ok',style:falta?'opacity:.6':'',onclick:()=>{ if(falta){ toast('Falta(m) '+falta+' resposta(s)','warn'); return; }
       const q=loadChQ(), t=new Date().toISOString(); comps.forEach((c,i)=>q.push({ ID:'CH-'+Date.now()+'-'+i, Mes:A.mes, Avaliador:avaliador, Colaborador:A.colab, Competencia:c.nome, Nota:String(A.sel[c.nome]), Comentario:A.com||'', DataHora:t, Dispositivo:deviceName() }));
       saveChQ(q); syncChefia(); toast(auto?'Obrigado — a tua autoavaliação ficou guardada ✅':'Avaliação de '+curto(A.colab)+' guardada ✅','ok');
