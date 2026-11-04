@@ -1532,12 +1532,17 @@ const COMP_CHEFIA_DEF=[
 const ESCALA_CH=['','Insuficiente','A melhorar','Cumpre','Bom','Excelente'], COR_CH=['','#dc2626','#f97316','#eab308','#22c55e','#2563eb'];
 function compChefia(){ const c=state.cfg&&state.cfg.competenciasChefia; return (Array.isArray(c)&&c.length)?c:COMP_CHEFIA_DEF; }
 function mesCh(off){ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()+(off||0)); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
-function loadChQ(){ try{ return JSON.parse(localStorage.getItem('q_chefia')||'[]'); }catch(e){ return []; } }
-function saveChQ(q){ try{ localStorage.setItem('q_chefia',JSON.stringify(q)); }catch(e){} }
+// 04-11: ela — «o Rui não conseguiu fazer a avaliação, só o primeiro ficou gravado». Gravava tudo, mas depois do envio as linhas
+// saíam da fila e a cópia da nuvem só se relia de 10 em 10 min → a pessoa voltava a ⬜ e parecia perdida (refez o Hugo). Agora o
+// que segue fica logo na cópia da nuvem; e se o localStorage estiver cheio a fila fica em memória em vez de se perder calada.
+var _chMem=null;
+function loadChQ(){ if(_chMem) return _chMem.slice(); try{ return JSON.parse(localStorage.getItem('q_chefia')||'[]'); }catch(e){ return []; } }
+function saveChQ(q){ try{ localStorage.setItem('q_chefia',JSON.stringify(q)); _chMem=null; }catch(e){ _chMem=q.slice(); } }
 var _chAndar=false;
 async function syncChefia(){ const url=state.cfg&&state.cfg.urlChefia; if(!url||_chAndar) return; let q=loadChQ(); if(!q.length) return; _chAndar=true; const ok={};
   try{ for(const r of q){ try{ const x=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(r)}); if(x.ok) ok[r.ID]=1; }catch(e){} } }
-  finally{ saveChQ(loadChQ().filter(r=>!ok[r.ID])); _chAndar=false; } }
+  finally{ const env=q.filter(r=>ok[r.ID]); if(env.length) state._chNuvem=(state._chNuvem||[]).concat(env);
+    saveChQ(loadChQ().filter(r=>!ok[r.ID])); _chAndar=false; } }
 setInterval(()=>{ try{ syncChefia(); }catch(e){} }, 30000);
 async function loadChefiaNuvem(){ const url=state.cfg&&state.cfg.urlChefiaLer; if(!url) return;
   try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); let x=await r.json(); if(!Array.isArray(x)) x=(x&&x.value)||[]; state._chNuvem=x; }catch(e){} }
