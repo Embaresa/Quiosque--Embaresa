@@ -1058,7 +1058,9 @@ const FASE_DEF={
   embf: { nome:'Embalamento final', ic:'🎁', op:/embalamento final/i, img:['caixa','peca'] } };
 // linha = o caminho da caixa. 15-10: "a preparação faz parte da montagem, para já" → sem fase de preparação (o código ainda aceita prep/prepPara se um dia voltar)
 const L_SOLD=['sold','arm1','mont','arm2','ann','emb'], L_SEMSOLD=['mont','arm2','ann','emb'],
-      L_KC1=['sold','arm1','montb','arm2','annb','emb1','tampa','embf'], L_KCEV=['montb','arm2','annb','emb1','tampa','embf'];
+      // 04-11: ela — «no KC monta-se a caixa e depois é necessário montar uma tampa» → a tampa vem LOGO a seguir à montagem da caixa
+      // (antes estava depois da ANN e do embalamento (1): nenhuma caixa chegava lá e a tampa nunca aparecia no percurso).
+      L_KC1=['sold','arm1','montb','tampa','arm2','annb','emb1','embf'], L_KCEV=['montb','tampa','arm2','annb','emb1','embf'];
 const FLUXOS=[
   { id:'E2',  nome:'E2 V3', re:/^E2-(Upper|Lower) (Dir|Esq) V3$/i, img:'E2', linha:L_SOLD },
   { id:'SA',  nome:'Semi Asa V2', re:/^Praetor-Semi Asa (Dir|Esq) V2$/i, img:'SA', linha:L_SOLD },
@@ -1108,10 +1110,12 @@ function registarFase(j, faseId){ const a=lerFases(); const quem=(j.workers||[])
 // série, por isso uma entrada que o motorista também faça não conta a dobrar. Não se aplica às caixas Praetor (contam-se por
 // quantidade) nem às estruturas (S…). A saída já era automática no transporte (trPartir).
 function stockEntradaAuto(j, faseId){ try{
-  const fl=fluxoDoArtigo(j.artigo); if(!fl || fl.quant) return; const prox=proxFase(fl,faseId); if(!prox || prox.id!=='arm2') return;
+  const fl=fluxoDoArtigo(j.artigo); if(!fl || fl.quant) return;
+  // 04-11: no KC a tampa faz-se em paralelo → entra no stock quando a caixa fica no Armazém (caixa E tampa concluídas)
+  const chega=s=>{ if(fl.linha.includes('tampa')){ const e=(state.enc||[]).find(x=>String(x.serie).toUpperCase()===String(s).toUpperCase())||{serie:s,estado:''}; return estadoCaixa(j.artigo,e).fase==='arm2'; } const prox=proxFase(fl,faseId); return !!prox && prox.id==='arm2'; };
   const ja=computeStock(), noStock=new Set((ja[j.artigo]||[]).map(chaveSerie));
   const q=loadStockQ(), t=nowTs(), dh=new Date().toLocaleString('pt-PT'), quem=(j.workers||[]).map(w=>w.opCurto).filter(Boolean).join(', ');
-  let n=0; (j.series||[]).forEach(s=>{ s=String(s||'').trim(); if(!s || isEstr(s) || noStock.has(chaveSerie(s))) return;
+  let n=0; (j.series||[]).forEach(s=>{ s=String(s||'').trim(); if(!s || isEstr(s) || noStock.has(chaveSerie(s)) || !chega(s)) return;
     q.push({ ID:'STA-'+t+'-'+s, Data:dstr(t), Motorista:'AUTO · '+(quem||'montagem'), Programa:j.programa||progDoArtigo(j.artigo)||'', Artigo:j.artigo, NumSerie:s, Movimento:'Entra', Destino:'', DataHoraRegisto:dh }); n++; });
   if(n){ saveStockQ(q); syncStockQ(); } }catch(e){} }
 // fase atual de uma caixa: o que já se sabe (fases concluídas + trabalhos registados + estado nas Encomendas)
@@ -1133,13 +1137,16 @@ function estadoCaixa(artigo, e){
     if(f) (por[f.id]=por[f.id]||[]).push(h); });
   const r={ mat:!!(fl.prep&&conc.has(fl.prep)), matDecorrer:!!(fl.prep&&!conc.has(fl.prep)&&por[fl.prep]) };
   let pos=-1, dec=false, ult=null;
-  for(let i=L.length-1;i>=0;i--){ const id=L[i]; if(!FASE_DEF[id].op) continue;
+  // 04-11: ela — «ainda não entreguei a caixa mas já estou a adiantar a tampa» → a TAMPA do KC é um trabalho em paralelo: enquanto a
+  // montagem da caixa não está concluída, a tampa (feita ou a decorrer) não mexe na posição da caixa (fica na montagem).
+  const tampaLado=id=>id==='tampa' && L.includes('montb') && !conc.has('montb');
+  for(let i=L.length-1;i>=0;i--){ const id=L[i]; if(!FASE_DEF[id].op || tampaLado(id)) continue;
     if(conc.has(id)){ pos=i+1; break; }
     if(por[id]){ pos=i; dec=true; ult=por[id][por[id].length-1]; break; } }
   const iEmb=L.findIndex(id=>/^emb/.test(id)), iAnn=L.findIndex(id=>/^ann/.test(id));
   const minimo=est==='embalada'?(iEmb>=0?iEmb+1:L.length):est==='entregue'?iAnn:est==='produzida'?L.indexOf('arm2'):-1;
   if(minimo>pos){ pos=minimo; dec=false; ult=null; }
-  return Object.assign(r,{ fase:pos<0?'novo':(pos>=L.length?'fim':L[pos]), decorrer:dec, ult }); }
+  return Object.assign(r,{ fase:pos<0?'novo':(pos>=L.length?'fim':L[pos]), decorrer:dec, ult, tampaFeita:conc.has('tampa'), tampaDec:!conc.has('tampa')&&!!por.tampa, tampaUlt:por.tampa?por.tampa[por.tampa.length-1]:null }); }
 // 19-10-2026: SOLDADURA SEM NÚMERO DE CAIXA. Ela: "e se os números só fossem adicionados depois da soldadura? muitas vezes quando
 // soldam não sabem para que é… como garantimos a rastreabilidade" · "nada para escrever nas estruturas" · todas as soldaduras.
 // A soldadura faz uma ESTRUTURA com número do quiosque (S<mmdd>-<hhmmss>, só no sistema), que entra no armazém de estruturas
@@ -1184,6 +1191,7 @@ function caixasNaFase(fl, id, cx){
     return es.concat(cx.filter(c=>c.fase===id)); }
   if(fl.prep && id===fl.prep) return cx.filter(c=>c.matDecorrer);
   if(fl.prep && id===fl.prepPara && !fl.linha.includes(id)){ const a=antesDaMontagem(fl); return cx.filter(c=>c.mat && a.includes(c.fase)); }
+  if(id==='tampa' && fl.linha.includes('montb')) return cx.filter(c=>!c.tampaFeita && (c.tampaDec || c.fase==='tampa'));   // 04-11: tampa em paralelo
   return cx.filter(c=>c.fase===id); }
 // as caixas que se podem escolher numa fase (a decorrer primeiro; depois as que vêm da fase anterior)
 function candidatas(fl, fase, cx){
@@ -1207,6 +1215,11 @@ function candidatas(fl, fase, cx){
   if(fl.prep && fase===fl.prep){ const a=antesDaMontagem(fl);
     return cx.filter(c=>c.matDecorrer).map(c=>mais(c,'continuar — preparação a decorrer'))
       .concat(cx.filter(c=>!c.mat&&!c.matDecorrer&&a.includes(c.fase)).slice(0,3).map(c=>mais(c,c.fase==='novo'?(L.includes('sold')?'ainda por soldar':'ainda por começar'):'estrutura '+(c.fase==='arm1'?'soldada':'em soldadura')))); }
+  if(fase==='tampa' && L.includes('montb')){   // 04-11: a tampa pode adiantar-se com a caixa ainda na montagem
+    const qt=c=>c.tampaUlt&&c.tampaUlt.dia?' a '+c.tampaUlt.dia.slice(8,10)+'/'+c.tampaUlt.dia.slice(5,7)+(c.tampaUlt.quem?' ('+c.tampaUlt.quem+')':''):'';
+    return cx.filter(c=>c.tampaDec).map(c=>mais(c,'continuar — tampa a decorrer'+qt(c)))
+      .concat(cx.filter(c=>c.fase==='tampa'&&!c.tampaDec).map(c=>mais(c,'pronta para a tampa — a caixa já está montada')),
+        cx.filter(c=>c.fase==='montb'&&!c.tampaDec&&!c.tampaFeita).map(c=>mais(c,'adiantar a tampa — a caixa ainda está na montagem'+(c.decorrer?' (a decorrer)':'')))); }
   const i=L.indexOf(fase); if(i<0) return [];
   const cont=cx.filter(c=>c.fase===fase&&c.decorrer).map(c=>mais(c,'continuar — '+nome(fase)+' a decorrer'+quando(c)));
   const espera=cx.filter(c=>c.fase===fase&&!c.decorrer).map(c=>mais(c,'pronta para '+nome(fase)+pronto(c)));
@@ -1289,7 +1302,7 @@ function renderPercurso(w){
 // Pergunta-se quando a caixa escolhida já está a meio nesta fase, ou quando há OUTRA caixa do mesmo tipo a meio.
 function escolherCaixaFase(f, serie, ok){
   if(!ok) state.draft._notaCont=null;
-  if(!ok && typeof serie==='string' && !isEstr(serie)){ const cx=caixasDoArtigo(state.draft.artigo), aMeio=c=>c.fase===f.id && c.decorrer;
+  if(!ok && typeof serie==='string' && !isEstr(serie)){ const cx=caixasDoArtigo(state.draft.artigo), aMeio=c=>f.id==='tampa'?!!c.tampaDec:(c.fase===f.id && c.decorrer);
     const esta=cx.find(c=>c.e.serie===serie), outras=cx.filter(c=>aMeio(c) && c.e.serie!==serie).map(c=>c.e.serie);
     if((esta && aMeio(esta)) || outras.length){ state._pcont={ f, serie, esta:!!(esta && aMeio(esta)), outras }; render(); return; } }
   const ops=operacoesDoArtigo(state.draft.artigo).filter(o=>f.op.test(o.operacao) && (!state.area||state.area.includes(o.unidade)));
