@@ -1092,6 +1092,14 @@ function imgFase(fl,fase,art){ const fs=faseP(fase); const nomes=fs?fs.img:['cai
   const tenta=()=>{ if(i>=cands.length){ im.replaceWith(el('div',{class:'pc-ic'},fs?fs.ic:'📦')); return; } const [f,n,proprio]=cands[i++]; im.className='pc-img'+(n==='peca'&&!proprio&&!/^(EVK|PEH)$/.test(fl.img)?' cor':''); im.src='img-fases/'+f+'.png'; };
   im.onerror=tenta; tenta(); return im; }
 function lerFases(){ try{ return JSON.parse(localStorage.getItem('q_fases')||'[]'); }catch(e){ return []; } }
+// 05-11-2026: ela reabre no Supervisor (só no PC dela) as caixas dadas como prontas sem estarem acabadas → linhas «X-<fase>» e
+// «X-E<n>» na folha Fases. O que foi registado ANTES delas para essa caixa e essa fase/etapa deixa de contar (e as X- também não).
+var _fvMemo={b:null,n:-1,r:null};
+function fasesValidasQ(){ const a=lerFases(), b=state._fasesNuvem||[]; if(_fvMemo.r && _fvMemo.b===b && _fvMemo.n===a.length) return _fvMemo.r;
+  const L=a.concat(b), mx={}, ts=r=>{ const n=Number(String(r.ID||'').split('-')[1]); return isFinite(n)?n:0; }, k=(r,f)=>String(r.Artigo||'').trim().toLowerCase()+'|'+String(r.Serie||'').trim().toUpperCase()+'|'+f;
+  L.forEach(r=>{ const m=String(r.Fase||'').match(/^X-(.+)$/); if(m){ const kk=k(r,m[1]); mx[kk]=Math.max(mx[kk]||0,ts(r)); } });
+  const out=Object.keys(mx).length?L.filter(r=>{ const f=String(r.Fase||''); if(/^X-/.test(f)) return false; const x=mx[k(r,f)]; return !x || ts(r)>x; }):L;
+  _fvMemo={b,n:a.length,r:out}; return out; }
 function gravarFases(a){ try{ localStorage.setItem('q_fases',JSON.stringify(a)); }catch(e){} }
 var _fasesAndar=false;   // 16-10: duas chamadas ao mesmo tempo (etapas + fase) enviavam as mesmas linhas 2x
 async function syncFases(){ const url=state.cfg&&state.cfg.urlFases; if(!url) return; if(_fasesAndar){ setTimeout(syncFases,3000); return; } _fasesAndar=true; try{ const a=lerFases(); let mudou=false;
@@ -1101,7 +1109,7 @@ async function loadFasesNuvem(){ const url=state.cfg&&state.cfg.urlFasesLer; if(
   try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); let x=await r.json(); if(!Array.isArray(x)) x=(x&&x.value)||[]; state._fasesNuvem=x; }catch(e){} }
 // fases concluídas de uma caixa → Map fase → dia em que ficou concluída
 function fasesConcluidas(artigo, serie){ const s=String(serie||'').toUpperCase(), a=String(artigo||'').trim().toLowerCase(), c=new Map();
-  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ if(String(r.Serie||'').toUpperCase()===s && String(r.Artigo||'').trim().toLowerCase()===a){ const f=String(r.Fase||''), d=String(r.Data||''); if(!c.has(f)||d>c.get(f)) c.set(f,d); } }); return c; }
+  fasesValidasQ().forEach(r=>{ if(String(r.Serie||'').toUpperCase()===s && String(r.Artigo||'').trim().toLowerCase()===a){ const f=String(r.Fase||''), d=String(r.Data||''); if(!c.has(f)||d>c.get(f)) c.set(f,d); } }); return c; }
 function registarFase(j, faseId){ const a=lerFases(); const quem=(j.workers||[]).map(w=>w.opCurto).filter(Boolean).join(', ');
   (j.series||[]).forEach(s=>a.push({ ID:'FS-'+nowTs()+'-'+s, Data:dstr(nowTs()), Artigo:j.artigo, Serie:s, Fase:faseId, Operacao:j.operacao, Quem:quem, Dispositivo:deviceName(), DataHoraRegisto:new Date().toLocaleString('pt-PT') }));
   gravarFases(a); syncFases(); if(quem!=='AUTO') stockEntradaAuto(j,faseId); }
@@ -1111,7 +1119,8 @@ function registarFase(j, faseId){ const a=lerFases(); const quem=(j.workers||[])
 // quantidade) nem às estruturas (S…). A saída já era automática no transporte (trPartir).
 function stockEntradaAuto(j, faseId){ try{
   const fl=fluxoDoArtigo(j.artigo); if(!fl || fl.quant) return;
-  // 04-11: no KC a tampa faz-se em paralelo → entra no stock quando a caixa fica no Armazém (caixa E tampa concluídas)
+  // 04-11: no KC a caixa entra no stock quando a CAIXA fica feita (ela fatura o envio sem tampa); concluir a tampa não mexe no stock
+  if(faseId==='tampa' && fl.linha.includes('montb')) return;
   const chega=s=>{ if(fl.linha.includes('tampa')){ const e=(state.enc||[]).find(x=>String(x.serie).toUpperCase()===String(s).toUpperCase())||{serie:s,estado:''}; return estadoCaixa(j.artigo,e).fase==='arm2'; } const prox=proxFase(fl,faseId); return !!prox && prox.id==='arm2'; };
   const ja=computeStock(), noStock=new Set((ja[j.artigo]||[]).map(chaveSerie));
   const q=loadStockQ(), t=nowTs(), dh=new Date().toLocaleString('pt-PT'), quem=(j.workers||[]).map(w=>w.opCurto).filter(Boolean).join(', ');
@@ -1137,16 +1146,18 @@ function estadoCaixa(artigo, e){
     if(f) (por[f.id]=por[f.id]||[]).push(h); });
   const r={ mat:!!(fl.prep&&conc.has(fl.prep)), matDecorrer:!!(fl.prep&&!conc.has(fl.prep)&&por[fl.prep]) };
   let pos=-1, dec=false, ult=null;
-  // 04-11: ela — «ainda não entreguei a caixa mas já estou a adiantar a tampa» → a TAMPA do KC é um trabalho em paralelo: enquanto a
-  // montagem da caixa não está concluída, a tampa (feita ou a decorrer) não mexe na posição da caixa (fica na montagem).
-  const tampaLado=id=>id==='tampa' && L.includes('montb') && !conc.has('montb');
+  // 04-11: ela — «ainda não entreguei a caixa mas já estou a adiantar a tampa» e «ela entra no stock como caixa porque eu faturo o envio
+  // da caixa sem tampa mas depois levo a tampa» → a TAMPA do KC é um trabalho À PARTE: nunca mexe na posição da caixa (a caixa feita
+  // segue logo para o armazém/stock/ANN); a tampa fica pendente dessa caixa até estar feita.
+  const tampaLado=id=>id==='tampa' && L.includes('montb');
   for(let i=L.length-1;i>=0;i--){ const id=L[i]; if(!FASE_DEF[id].op || tampaLado(id)) continue;
     if(conc.has(id)){ pos=i+1; break; }
     if(por[id]){ pos=i; dec=true; ult=por[id][por[id].length-1]; break; } }
+  if(pos>=0 && L[pos]==='tampa' && L.includes('montb')) pos++;   // 04-11: caixa feita → passa a tampa à frente
   const iEmb=L.findIndex(id=>/^emb/.test(id)), iAnn=L.findIndex(id=>/^ann/.test(id));
   const minimo=est==='embalada'?(iEmb>=0?iEmb+1:L.length):est==='entregue'?iAnn:est==='produzida'?L.indexOf('arm2'):-1;
   if(minimo>pos){ pos=minimo; dec=false; ult=null; }
-  return Object.assign(r,{ fase:pos<0?'novo':(pos>=L.length?'fim':L[pos]), decorrer:dec, ult, tampaFeita:conc.has('tampa'), tampaDec:!conc.has('tampa')&&!!por.tampa, tampaUlt:por.tampa?por.tampa[por.tampa.length-1]:null }); }
+  return Object.assign(r,{ fase:pos<0?'novo':(pos>=L.length?'fim':L[pos]), decorrer:dec, ult, montbFeita:conc.has('montb'), tampaFeita:conc.has('tampa'), tampaDec:!conc.has('tampa')&&!!por.tampa, tampaUlt:por.tampa?por.tampa[por.tampa.length-1]:null }); }
 // 19-10-2026: SOLDADURA SEM NÚMERO DE CAIXA. Ela: "e se os números só fossem adicionados depois da soldadura? muitas vezes quando
 // soldam não sabem para que é… como garantimos a rastreabilidade" · "nada para escrever nas estruturas" · todas as soldaduras.
 // A soldadura faz uma ESTRUTURA com número do quiosque (S<mmdd>-<hhmmss>, só no sistema), que entra no armazém de estruturas
@@ -1165,7 +1176,7 @@ function artEstrutura(art){ const a=String(art||'').trim();
 function nomeEstrutura(art){ return /Semi Asa/i.test(art||'')?'Estrutura Semi Asa Praetor V2 (serve à Dir e à Esq)':/^KC 390-(Upper|Lower) (Esq|Dir) V2$/i.test(art||'')?'Estrutura KC 390 V2 (serve às 4: Upper/Lower, Esq/Dir)':/^KC 390-(Upper|Lower) (Esq|Dir)$/i.test(art||'')?'Estrutura KC 390 V1 (serve às 4: Upper/Lower, Esq/Dir)':'Estrutura '+(art||''); }
 function novoNumEstr(){ const d=new Date(), p=n=>String(n).padStart(2,'0'); return 'S'+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds()); }
 function estruturasDe(art){ const a=artEstrutura(art).trim().toLowerCase(), m=new Map(), vistos=new Set();
-  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const s=String(r.Serie||'').trim().toUpperCase(); if(!isEstr(s) || artEstrutura(r.Artigo).toLowerCase()!==a) return;
+  fasesValidasQ().forEach(r=>{ const s=String(r.Serie||'').trim().toUpperCase(); if(!isEstr(s) || artEstrutura(r.Artigo).toLowerCase()!==a) return;
     if(r.ID){ if(vistos.has(r.ID)) return; vistos.add(r.ID); }
     const x=m.get(s)||{ serie:s, inicio:'', quem:'', sold:'', soldTs:0, quemSold:'', uso:'', usoEm:'', etapas:new Set() };
     const f=String(r.Fase||''), d=String(r.Data||'');
@@ -1191,7 +1202,7 @@ function caixasNaFase(fl, id, cx){
     return es.concat(cx.filter(c=>c.fase===id)); }
   if(fl.prep && id===fl.prep) return cx.filter(c=>c.matDecorrer);
   if(fl.prep && id===fl.prepPara && !fl.linha.includes(id)){ const a=antesDaMontagem(fl); return cx.filter(c=>c.mat && a.includes(c.fase)); }
-  if(id==='tampa' && fl.linha.includes('montb')) return cx.filter(c=>!c.tampaFeita && (c.tampaDec || c.fase==='tampa'));   // 04-11: tampa em paralelo
+  if(id==='tampa' && fl.linha.includes('montb')) return cx.filter(c=>!c.tampaFeita && (c.tampaDec || c.montbFeita));   // 04-11: tampa em paralelo
   return cx.filter(c=>c.fase===id); }
 // as caixas que se podem escolher numa fase (a decorrer primeiro; depois as que vêm da fase anterior)
 function candidatas(fl, fase, cx){
@@ -1218,8 +1229,8 @@ function candidatas(fl, fase, cx){
   if(fase==='tampa' && L.includes('montb')){   // 04-11: a tampa pode adiantar-se com a caixa ainda na montagem
     const qt=c=>c.tampaUlt&&c.tampaUlt.dia?' a '+c.tampaUlt.dia.slice(8,10)+'/'+c.tampaUlt.dia.slice(5,7)+(c.tampaUlt.quem?' ('+c.tampaUlt.quem+')':''):'';
     return cx.filter(c=>c.tampaDec).map(c=>mais(c,'continuar — tampa a decorrer'+qt(c)))
-      .concat(cx.filter(c=>c.fase==='tampa'&&!c.tampaDec).map(c=>mais(c,'pronta para a tampa — a caixa já está montada')),
-        cx.filter(c=>c.fase==='montb'&&!c.tampaDec&&!c.tampaFeita).map(c=>mais(c,'adiantar a tampa — a caixa ainda está na montagem'+(c.decorrer?' (a decorrer)':'')))); }
+      .concat(cx.filter(c=>c.montbFeita&&!c.tampaFeita&&!c.tampaDec).map(c=>mais(c,'falta a tampa — a caixa já está feita')),
+        cx.filter(c=>c.fase==='montb'&&!c.montbFeita&&!c.tampaDec&&!c.tampaFeita).map(c=>mais(c,'adiantar a tampa — a caixa ainda está na montagem'+(c.decorrer?' (a decorrer)':'')))); }
   const i=L.indexOf(fase); if(i<0) return [];
   const cont=cx.filter(c=>c.fase===fase&&c.decorrer).map(c=>mais(c,'continuar — '+nome(fase)+' a decorrer'+quando(c)));
   const espera=cx.filter(c=>c.fase===fase&&!c.decorrer).map(c=>mais(c,'pronta para '+nome(fase)+pronto(c)));
@@ -1316,7 +1327,7 @@ function escolherCaixaFase(f, serie, ok){
 function etapasDe(artigo,op){ const e=(state.cfg&&state.cfg.etapas)||{}; return e[String(artigo||'')+'|'+String(op||'')]||null; }
 // 19-10: o acerto da caixa (config → acertosFases) também apaga as etapas de antes — a EM2759 tinha as etapas da EM2760
 function etapasFeitas(artigo,serie,op,jobId){ const s=String(serie||'').toUpperCase(), a=String(artigo||'').trim().toLowerCase(), f=new Set(), ac=acertoDaCaixa(artigo,serie);
-  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const m=String(r.Fase||'').match(/^E(\d+)$/); if(!m) return;
+  fasesValidasQ().forEach(r=>{ const m=String(r.Fase||'').match(/^E(\d+)$/); if(!m) return;
     if(String(r.Serie||'').toUpperCase()===s && String(r.Artigo||'').trim().toLowerCase()===a && String(r.Operacao||'')===String(op||'') && !(jobId && r.Job===jobId) && !(ac && String(r.Data||'')<=String(ac.Data))) f.add(Number(m[1])); });
   return f; }
 function registarEtapas(j, nums){ if(!nums||!nums.length) return; const a=lerFases(); const quem=(j.workers||[]).filter(w=>!w.endTs).map(w=>w.opCurto).filter(Boolean).join(', ');
@@ -1329,7 +1340,7 @@ function registarEtapas(j, nums){ if(!nums||!nums.length) return; const a=lerFas
 // no Planear e controlar e nas Compras.
 const MATERIAIS_ESPERA=[['🔩','Alumínio'],['🧵','Lona'],['🪵','Madeira'],['🔧','Parafusos / ferragens'],['📦','Outro material']];
 function esperaDe(artigo, serie){ const s=String(serie||'').trim().toUpperCase(), a=String(artigo||'').trim().toLowerCase(); if(!s) return null; let u=null;
-  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const f=String(r.Fase||''); if(f!=='ESPERA' && f!=='ESPERA-FIM') return;
+  fasesValidasQ().forEach(r=>{ const f=String(r.Fase||''); if(f!=='ESPERA' && f!=='ESPERA-FIM') return;
     if(String(r.Serie||'').trim().toUpperCase()!==s || String(r.Artigo||'').trim().toLowerCase()!==a) return;
     const t=Number(String(r.ID||'').split('-')[1])||0; if(!u || t>u.t) u={t,r}; });
   return (u && u.r.Fase==='ESPERA')?{ material:String(u.r.Job||'material'), desde:String(u.r.Data||''), op:String(u.r.Operacao||''), quem:String(u.r.Quem||'') }:null; }
@@ -1357,7 +1368,7 @@ function blocoEtapas(w,j){ const et=etapasDe(j.artigo,j.operacao); if(!et) retur
   return {et,sel,feitas,stk,usos,doJob}; }
 // etapas que os colegas DESTE trabalho já marcaram (contam como feitas, mas quem também trabalhou nelas pode marcar)
 function etapasDoJob(j){ const s=String((j.series||[])[0]||'').toUpperCase(), m=new Map();
-  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const x=String(r.Fase||'').match(/^E(\d+)$/); if(!x || r.Job!==j.id || r.Quem==='STOCK' || String(r.Serie||'').toUpperCase()!==s) return;
+  fasesValidasQ().forEach(r=>{ const x=String(r.Fase||'').match(/^E(\d+)$/); if(!x || r.Job!==j.id || r.Quem==='STOCK' || String(r.Serie||'').toUpperCase()!==s) return;
     const n=Number(x[1]); if(!m.has(n)) m.set(n,String(r.Quem||'um colega')); }); return m; }
 // 19-10-2026: ela — "uma janela a perguntar que fases fizeste, ele escolhe, e depois abre uma nova janela: a caixa está pronta
 // para ir para o cliente? … à prova de erro". Na EM2759/2760 o botão "concluída" marcou sozinho as etapas que faltavam e deu a
@@ -1374,7 +1385,7 @@ function renderFimFaseVarias(w,j,f){
   if(!state._fv||state._fv.j!==j.id) state._fv={j:j.id,p:1,sel:{}};
   const V=state._fv, passo=t=>el('div',{class:'chip',style:'margin-bottom:8px'},t);
   const feitas=s=>{ const x=etapasFeitas(j.artigo,s,j.operacao); etapasDoStock(j.artigo,s,j.operacao).forEach(n=>x.add(n));
-    lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const m=String(r.Fase||'').match(/^E(\d+)$/); if(m && r.Job===j.id && String(r.Serie||'').toUpperCase()===String(s).toUpperCase()) x.add(Number(m[1])); }); return x; };
+    fasesValidasQ().forEach(r=>{ const m=String(r.Fase||'').match(/^E(\d+)$/); if(m && r.Job===j.id && String(r.Serie||'').toUpperCase()===String(s).toUpperCase()) x.add(Number(m[1])); }); return x; };
   const jaPronta=s=>{ const d=fasesConcluidas(j.artigo,s).get(f.id); return !!d && String(d)>=String(j.dia||''); };
   const sel=s=>V.sel[s]||(V.sel[s]=[]);
   const meuW=()=>state.op?j.workers.find(x=>x.pin===state.op.pin && !x.endTs):null;
@@ -1733,7 +1744,7 @@ function renderAvalChefia(w){ const ehRui=/rich[aá]u/i.test(String((state.op&&s
 function compsDaArea(){ const l=(state.cfg&&state.cfg.componentesStock)||[]; return state.area? l.filter(c=>state.area.includes(c.unidade)) : l; }
 function compPorId(id){ return ((state.cfg&&state.cfg.componentesStock)||[]).find(c=>c.id===id)||null; }
 function compDoJob(j){ if(!j) return null; if(j.comp) return compPorId(j.comp.id); return ((state.cfg&&state.cfg.componentesStock)||[]).find(c=>('Stock — '+c.nome)===j.operacao)||null; }
-function linhasStock(){ const m={}; lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ if(/^STK[+-]$/.test(String(r.Fase||''))) m[r.ID]=r; }); return Object.values(m); }
+function linhasStock(){ const m={}; fasesValidasQ().forEach(r=>{ if(/^STK[+-]$/.test(String(r.Fase||''))) m[r.ID]=r; }); return Object.values(m); }
 function stockComp(id){ let n=0; linhasStock().forEach(r=>{ if(String(r.Artigo)!=='COMP:'+id) return; if(r.Fase==='STK+') n+=Math.max(0,parseInt(r.Job)||0); else n-=1; }); return n; }
 function compParaEtapa(artigo,op,nome){ return ((state.cfg&&state.cfg.componentesStock)||[]).find(c=>c.op===op && c.etapa===nome && (c.caixas||[]).includes(artigo))||null; }
 function registarStockComp(j,qtd){ const c=compDoJob(j); if(!c||!(qtd>0)) return; const a=lerFases(); const quem=(j.workers||[]).map(w=>w.opCurto).filter(Boolean).join(', ');
@@ -1742,7 +1753,7 @@ function registarStockComp(j,qtd){ const c=compDoJob(j); if(!c||!(qtd>0)) return
 // 23-10-2026: EM2521 — o Valdir fechou às 09:25 e o Pedro às 09:27 e as cunhas saíram DUAS vezes do stock para a mesma caixa.
 // Um componente só sai do stock uma vez por caixa (descontando as correções «correção <série>» que o devolveram).
 function jaSaiuDoStock(s,cid){ const S=String(s||'').trim().toUpperCase(), A='COMP:'+cid, vis=new Set(); let n=0;
-  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ if(String(r.Artigo||'')!==A || vis.has(r.ID)) return; vis.add(r.ID); const rs=String(r.Serie||'').trim().toUpperCase();
+  fasesValidasQ().forEach(r=>{ if(String(r.Artigo||'')!==A || vis.has(r.ID)) return; vis.add(r.ID); const rs=String(r.Serie||'').trim().toUpperCase();
     if(r.Fase==='STK-' && rs===S) n++; else if(r.Fase==='STK+' && rs==='CORREÇÃO '+S) n--; });
   return n>0; }
 function usarStock(j,usos){ if(!usos||!usos.length) return; const a=lerFases(); const t=nowTs(), dh=new Date().toLocaleString('pt-PT');
@@ -1751,7 +1762,7 @@ function usarStock(j,usos){ if(!usos||!usos.length) return; const a=lerFases(); 
     a.push({ ID:'ES-'+t+'-'+s+'-'+u.n, Data:dstr(t), Artigo:j.artigo, Serie:s, Fase:'E'+u.n, Operacao:j.operacao, Quem:'STOCK', Dispositivo:deviceName(), DataHoraRegisto:dh, Job:j.id }); }));
   gravarFases(a); syncFases(); }
 function etapasDoStock(artigo,serie,op){ const s=String(serie||'').toUpperCase(), a=String(artigo||'').trim().toLowerCase(), f=new Set();
-  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const m=String(r.Fase||'').match(/^E(\d+)$/); if(!m||r.Quem!=='STOCK') return;
+  fasesValidasQ().forEach(r=>{ const m=String(r.Fase||'').match(/^E(\d+)$/); if(!m||r.Quem!=='STOCK') return;
     if(String(r.Serie||'').toUpperCase()===s && String(r.Artigo||'').trim().toLowerCase()===a && String(r.Operacao||'')===String(op||'')) f.add(Number(m[1])); });
   return f; }
 // 16-10: ela — "põe isto em quadrados senão eles perdem-se à procura, tem que ser à prova de preguiçoso".
@@ -1842,25 +1853,52 @@ function quadroVeTestes(){ return !!window.__TESTE || (((state.cfg&&state.cfg.av
 // forem fazendo?" → uma tarefa SEM número com quantidade conta as caixas desse artigo dadas como prontas nessa operação desde o dia
 // da tarefa (folha Fases, cada série uma vez; "6*SPOILERS" = 6) e passa de dia para dia até chegar à quantidade (ou ela a tirar).
 function feitasDaTarefa(t){ const vis=new Set(); let n=0;
-  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ if(String(r.Artigo||'').trim()!==t.artigo || String(r.Operacao||'')!==t.operacao || String(r.Data||'').slice(0,10)<t.dia) return;
+  fasesValidasQ().forEach(r=>{ if(String(r.Artigo||'').trim()!==t.artigo || String(r.Operacao||'')!==t.operacao || String(r.Data||'').slice(0,10)<t.dia) return;
     if(/^(E\d+|ESTR|LIG|USO|MI|COMP|ESPERA|ESPERA-FIM|STK.)$/.test(String(r.Fase||''))) return; const s=String(r.Serie||'').trim().toUpperCase(); if(!s||vis.has(s)) return; vis.add(s); n+=parseInt((s.match(/^(\d+)\*/)||[])[1])||1; });
   return n; }
+// 05-11-2026: ela — «não me aparecem trabalhos na soldadura para hoje»: a soldadura da E2-Lower Dir V3 «para a EM2628» (03-11) foi
+// planeada SEM número (a soldadura faz estruturas) e as tarefas sem número só apareciam no próprio dia. Agora passam de dia para dia
+// (até 14 dias) até haver uma dessa caixa/operação concluída na folha Fases depois do dia da tarefa (a tarefa mais antiga primeiro).
+function semNumPendentesQ(q,id,hoje){ const lim=dstr(nowTs()-14*864e5), grupos={}, out=[];
+  q.filter(t=>t.area===id && !t.serie && !t.semNum && !t.comp && !/^\u{1F9F0}/u.test(String(t.operacao||'')) && t.dia<hoje && t.dia>=lim).forEach(t=>{ const k=artEstrutura(t.artigo).toLowerCase()+'|'+t.operacao; (grupos[k]=grupos[k]||[]).push(t); });
+  Object.keys(grupos).forEach(k=>{ const ts=grupos[k].sort((a,b)=>String(a.dia).localeCompare(String(b.dia))||String(a.id).localeCompare(String(b.id)));
+    const art=k.slice(0,k.indexOf('|')), op=ts[0].operacao, vis=new Set(), feitas=[];
+    fasesValidasQ().forEach(r=>{ if(artEstrutura(r.Artigo).toLowerCase()!==art || String(r.Operacao||'')!==op) return;
+      if(/^(E\d+|ESTR|LIG|USO|MI|COMP|ESPERA|ESPERA-FIM|STK.)$/.test(String(r.Fase||''))) return;
+      const s=String(r.Serie||'').trim().toUpperCase(); if(!s||vis.has(s)) return; vis.add(s); feitas.push(String(r.Data||'').slice(0,10)); });
+    const livre=ts.map(()=>true); feitas.sort().forEach(d=>{ const i=ts.findIndex((t,j)=>livre[j] && t.dia<=d); if(i>=0) livre[i]=false; });
+    ts.forEach((t,j)=>{ if(livre[j]) out.push(t); }); });
+  return out; }
+// 05-11-2026: ela — «o KC que ainda não está finalizado não aparece» (EM2381: caixa concluída a 04-11, falta a tampa; a tarefa da
+// montagem saiu do plano e a tampa não tinha tarefa) → as caixas KC com a caixa feita (ou a tampa a decorrer) e a tampa por fazer
+// aparecem sozinhas no plano da área da tampa, até a tampa ficar concluída.
+function tampasEmFaltaQ(id){ const out=[], hoje=dstr(nowTs());
+  [...new Set((state.enc||[]).map(e=>e.artigo))].forEach(a=>{ const fl=fluxoDoArtigo(a); if(!fl || !fl.linha.includes('tampa') || !fl.linha.includes('montb')) return;
+    const o=operacoesDoArtigo(a).find(x=>/tampa/i.test(x.operacao)); if(!o) return; const ar=AREAS_Q.find(z=>(z.unidades||[]).includes(o.unidade)); if(!ar || ar.id!==id) return;
+    caixasDoArtigo(a).forEach(c=>{ if(c.tampaFeita || !(c.montbFeita||c.tampaDec)) return;
+      out.push({ id:'TAMPA-'+c.e.serie, dia:hoje, area:id, artigo:a, serie:c.e.serie, operacao:o.operacao, turno:'', nota:c.tampaDec?'tampa a decorrer':'falta a tampa — a caixa já está feita', _auto:true }); }); });
+  return out; }
 function tarefasDoQuadro(areaId){ const vt=quadroVeTestes(), q=((state.cfg&&state.cfg.quadro&&state.cfg.quadro.tarefas)||[]).filter(t=>!t.fechada && (!t.teste || vt)), id=areaId||areaIdAtual(), hoje=dstr(nowTs()), lim=dstr(nowTs()-7*864e5);
   if(!id) return []; const de=q.filter(t=>t.dia===hoje && t.area===id), vem=[], k=t=>String(t.serie||'').toUpperCase()+'|'+t.operacao;
-  q.filter(t=>t.area===id && t.serie && t.dia<hoje && t.dia>=lim).sort((a,b)=>String(b.dia).localeCompare(String(a.dia))).forEach(t=>{
+  q.filter(t=>t.area===id && t.serie && t.dia<hoje && (t.dia>=lim || (t.dia>=dstr(nowTs()-30*864e5) && kcTampaArt(t.artigo)))).sort((a,b)=>String(b.dia).localeCompare(String(a.dia))).forEach(t=>{
     if(de.some(x=>k(x)===k(t)) || vem.some(x=>k(x)===k(t)) || estadoTarefaQ(t)==='ok') return; vem.push(Object.assign({},t,{_vem:t.dia})); });
   // tarefas sem número com quantidade: passam até estarem feitas todas (sem limite de 7 dias); as de hoje também mostram quantas faltam
   q.filter(t=>t.area===id && !t.serie && t.semNum && t.dia<hoje).forEach(t=>{ const fe=feitasDaTarefa(t); if(t.qtd && fe>=t.qtd) return; vem.push(Object.assign({},t,{_vem:t.dia,_feitas:fe})); });
+  semNumPendentesQ(q,id,hoje).forEach(t=>vem.push(Object.assign({},t,{_vem:t.dia})));   // 05-11: sem número também passa
   de.forEach((t,i)=>{ if(!t.serie && t.semNum) de[i]=Object.assign({},t,{_feitas:feitasDaTarefa(t)}); });
   // 21-10: caixa à espera de material → vai para o grupo «⏸ À espera de material» (t._esp)
   const lst=(id==='log'?entregasDoQuadro():[]).concat(vem,de).map(t=>{ const e=(!t._entrega && t.serie)?esperaDe(t.artigo,t.serie):null; return e?Object.assign({},t,{_esp:e}):t; });
   // 22-10-2026: ela — "estas caixas estão em curso a aguardar lonas … no quiosque não aparecem" (EM2240, EM2457: não estão no plano de
   // hoje) → as caixas à espera de material aparecem SEMPRE no grupo ⏸ da área da operação em que pararam; tocar = continuar.
   const ja=new Set(lst.map(t=>String(t.serie||'').toUpperCase()+'|'+t.artigo)), ult={};
-  lerFases().concat(state._fasesNuvem||[]).forEach(r=>{ const f=String(r.Fase||''); if(f!=='ESPERA'&&f!=='ESPERA-FIM') return; const k=String(r.Serie||'').trim().toUpperCase()+'|'+String(r.Artigo||'').trim(), n=Number(String(r.ID||'').split('-')[1])||0; if(!ult[k]||n>ult[k].n) ult[k]={n,r}; });
+  fasesValidasQ().forEach(r=>{ const f=String(r.Fase||''); if(f!=='ESPERA'&&f!=='ESPERA-FIM') return; const k=String(r.Serie||'').trim().toUpperCase()+'|'+String(r.Artigo||'').trim(), n=Number(String(r.ID||'').split('-')[1])||0; if(!ult[k]||n>ult[k].n) ult[k]={n,r}; });
   Object.entries(ult).forEach(([k,u])=>{ if(u.r.Fase!=='ESPERA' || ja.has(k) || isEstr(u.r.Serie)) return; const op=String(u.r.Operacao||''), o=((state.cfg&&state.cfg.operacoes)||[]).find(x=>x.operacao===op);
     const ar=o?AREAS_Q.find(a=>(a.unidades||[]).includes(o.unidade)):null; if(!ar || ar.id!==id) return;
     lst.push({ id:'ESP-'+k, dia:hoje, area:id, artigo:String(u.r.Artigo||'').trim(), serie:String(u.r.Serie||'').trim(), operacao:op, turno:'', nota:'', _soEspera:true, _esp:esperaDe(u.r.Artigo,u.r.Serie) }); });
+  lst.forEach((t,i)=>{ try{ if(!t.serie || t._auto || !kcTampaArt(t.artigo) || /tampa/i.test(String(t.operacao||'')) || !/montagem/i.test(String(t.operacao||''))) return;
+    const c=fasesConcluidas(t.artigo,t.serie); if(!c.has('montb') || c.has('tampa')) return; const o=operacoesDoArtigo(t.artigo).find(x=>/tampa/i.test(x.operacao));
+    if(o) lst[i]=Object.assign({},t,{ operacao:o.operacao, nota:(t.nota?t.nota+' · ':'')+'caixa feita — falta a tampa' }); }catch(e){} });   // 05-11: planeia-se uma vez
+  try{ tampasEmFaltaQ(id).forEach(t=>{ if(lst.some(x=>String(x.serie||'').toUpperCase()===String(t.serie).toUpperCase())) return; lst.push(t); }); }catch(e){}   // 05-11
   return lst; }
 // 21-10-2026: ela — "os transportes saem automáticos do plano de entregas". Na área Transportes, as caixas com entrega pedida para
 // hoje (e as atrasadas dos últimos 14 dias, ainda não entregues) aparecem sozinhas; tocar → PIN → o transporte abre com elas na carga.
@@ -1874,9 +1912,14 @@ function entregasDoQuadro(){ const hoje=dstr(nowTs()), lim=dstr(nowTs()-14*864e5
 // Fases numa operação MAIS À FRENTE (soldadura < montagem < embalamento), esta tarefa conta como feita.
 const rkOpQ=o=>/embal/i.test(o)?3:/montag/i.test(o)?2:/soldad/i.test(o)?1:0;
 function jaMaisAFrenteQ(t){ const rk=rkOpQ(String(t.operacao||'')); if(!rk || !t.serie) return false; const s=String(t.serie).trim().toUpperCase(), a=String(t.artigo||'').trim().toLowerCase();
-  return lerFases().concat(state._fasesNuvem||[]).some(r=>String(r.Serie||'').trim().toUpperCase()===s && String(r.Artigo||'').trim().toLowerCase()===a
+  return fasesValidasQ().some(r=>String(r.Serie||'').trim().toUpperCase()===s && String(r.Artigo||'').trim().toLowerCase()===a
     && rkOpQ(String(r.Operacao||''))>rk && !/^(STK.|ESTR|LIG|USO|MI|COMP|ESPERA|ESPERA-FIM)$/.test(String(r.Fase||''))); }
+// 05-11-2026: ela — «eu só planeio uma vez; a caixa só desaparece da montagem depois da tampa concluída» → no KC a tarefa da montagem
+// fica no plano até a caixa E a tampa estarem concluídas (mesmo que o embalamento já tenha começado: é feito em paralelo).
+function kcTampaArt(a){ const fl=fluxoDoArtigo(a); return !!(fl && fl.linha.includes('tampa') && fl.linha.includes('montb')); }
 function estadoTarefaQ(t){ try{ if(t._entrega) return t._emTr?'run':''; if(!t.serie) return ''; const fl=fluxoDoArtigo(t.artigo);
+  if(kcTampaArt(t.artigo) && /montagem/i.test(String(t.operacao||''))){ const c=fasesConcluidas(t.artigo,t.serie); if(c.has('montb') && c.has('tampa')) return 'ok';
+    return (c.has('montb') || historicoDaSerie(t.artigo,t.serie).some(x=>/montagem/i.test(String(x.op||''))))?'run':''; }
   if(fl){ const f=faseDaOperacao(fl,t.artigo,t.serie,t.operacao); if(f && fasesConcluidas(t.artigo,t.serie).has(f.id)) return 'ok'; }
   if(jaMaisAFrenteQ(t)) return 'ok';
   return historicoDaSerie(t.artigo,t.serie).some(x=>x.op===t.operacao)?'run':''; }catch(e){ return ''; } }
@@ -2588,7 +2631,7 @@ function foraDoPlanoOK(d, series){
   const a=AREAS_Q.find(x=>(x.unidades||[]).includes(d.unidade)); if(!a || !areas.includes(a.id)) return true;
   if(d.modo!=='Encomenda' && !series.every(isEstr)) return true;          // caixas para stock (sem nº)
   const S=x=>String(x||'').trim().toUpperCase(), dg=x=>S(x).replace(/^[A-Z]{1,3}(?=\d)/,'');
-  const L=tarefasDoQuadro(a.id).filter(t=>!t._entrega && !t.comp), fases=lerFases().concat(state._fasesNuvem||[]);
+  const L=tarefasDoQuadro(a.id).filter(t=>!t._entrega && !t.comp), fases=fasesValidasQ();
   const aTrabalhar=s=>(state.jobs||[]).some(j=>j.status!=='done' && jobWorkersAtivos(j).length && (j.series||[]).some(y=>S(y)===S(s)))
     || (state._outros||[]).some(o=>S(o.series).split(/[\s,;·]+/).includes(S(s)));
   const ok=s=>{ if(aTrabalhar(s)) return true;
