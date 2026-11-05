@@ -72,6 +72,7 @@
   .plano .pt.esp{background:#2a2410;border-color:#6b5a1e;opacity:.75} .plano .pturno.esp{background:#3b2f0b;color:#f5d27a}
   .plano .pturno{margin:10px 0 6px;padding:4px 10px;border-radius:8px;background:#162b20;color:#9fd5b8;font-size:13px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
   .plano .pturno.agora{background:#34d399;color:#05261a}
+  .plano .pturno.urg{background:#ef4444;color:#fff;font-size:15px;box-shadow:0 0 0 2px #fde047}
   /* 03-11: ela — "sim, põe ao lado" (no tablet o plano ficava por cima). Ao lado até 560 px, com a coluna mais estreita; por cima só nos telemóveis */
   @media(max-width:900px){ .boardsplit{grid-template-columns:minmax(230px,36%) 1fr} .plano{padding:10px 10px 24px} .plano h2{font-size:19px} .plano .pt{padding:10px 11px} .plano .pt b{font-size:18px} .boardsplit .cta-areas{grid-template-columns:repeat(2,minmax(0,1fr))} .boardsplit .cta-areas .item{min-width:0;gap:8px;padding:12px 10px} .boardsplit .cta-areas .item span{font-size:26px} .boardsplit .cta-areas .item b{font-size:15px;overflow-wrap:anywhere} }
   @media(max-width:560px){ .boardsplit{grid-template-columns:1fr} .plano{border-right:0;border-bottom:2px solid #1f4a37;max-height:45vh} }
@@ -1950,13 +1951,18 @@ function painelPlano(){ state._quadroPre=null; state._trPre=null; const ver=area
     // 21-10: ela — "quero que fique visível turno 1 e turno 2" → dentro de cada área, por turno (o de agora destacado)
     // 21-10: ela — "as fracs trabalham só 1 turno; só a soldadura, montagem e transportes 2 turnos" → nas áreas de 1 turno não há T1/T2
     const umT=['mont2'].includes(a.id);
-    const lv=l.filter(t=>!t._esp), esps=l.filter(t=>t._esp);
-    const grupos=(umT?[['vem','↪ Ficou de dias anteriores',lv.filter(t=>t._vem)],['','Hoje',lv.filter(t=>!t._vem)]]
+    // 05-11-2026: ela — «fica no fundo e eles não veem porque aparece muita coisa» (EM2628 a entregar amanhã, no 2.º turno, por baixo
+    // de 9 tarefas de dias anteriores) → as caixas URGENTES/PRIORITÁRIAS ainda por acabar saem dos turnos e vão para um grupo no TOPO da área
+    const prQ=t=>{ const x=entregaProgK(t); return x?(x.urg?2:1):0; };
+    const lv0=l.filter(t=>!t._esp), esps=l.filter(t=>t._esp);
+    const urgs=lv0.filter(t=>prQ(t) && estadoTarefaQ(t)!=='ok').sort((x,y)=>prQ(y)-prQ(x));
+    const lv=lv0.filter(t=>!urgs.includes(t));
+    const grupos=[['urg','🚨 Entregar primeiro',urgs]].concat(umT?[['vem','↪ Ficou de dias anteriores',lv.filter(t=>t._vem)],['','Hoje',lv.filter(t=>!t._vem)]]
       :[['vem','↪ Ficou de dias anteriores',lv.filter(t=>t._vem)],['T1','1.º turno',lv.filter(t=>!t._vem&&t.turno==='T1')],['T2','2.º turno',lv.filter(t=>!t._vem&&t.turno==='T2')],['','Todo o dia',lv.filter(t=>!t._vem&&!t.turno)]])
       .concat([['esp','⏸ À espera de material',esps]]);
     grupos.forEach(([k,nome,g])=>{ if(!g.length) return; const agora=k===tA;
-      p.append(el('div',{class:'pturno'+(agora?' agora':'')+(k==='esp'?' esp':'')},nome+(agora?' · agora':'')));
-    const pr=t=>{ const x=entregaProgK(t); return x?(x.urg?2:1):0; };
+      p.append(el('div',{class:'pturno'+(agora?' agora':'')+(k==='esp'?' esp':'')+(k==='urg'?' urg':'')},nome+(agora?' · agora':'')));
+    const pr=prQ;
     g.slice().sort((x,y)=>pr(y)-pr(x)).forEach(t=>{ const quem=quemNaTarefa(t), e=quem?'run':estadoTarefaQ(t), ep=e==='ok'?null:entregaProgK(t);
       p.append(el('button',{class:'pt'+(e==='ok'?' ok':'')+(t._esp&&!quem?' esp':''),style:'border-left:6px solid '+(t._esp?'#eab308':ep?(ep.urg?'#ef4444':'#f97316'):a.cor)+(ep&&!t._esp?(ep.urg?';background:#3a1114;border:2px solid #ef4444;border-left:8px solid #ef4444;box-shadow:0 0 0 2px #fde047':';background:#33200f;border:2px solid #f97316;border-left:8px solid #f97316'):''),onclick:()=>{
           if(t._entrega){ state.intent='transp'; state._trPre=entregasDoQuadro().filter(x=>!x._emTr); state.op=null; state.pinbuf=''; state.view='pin'; render(); return; }   // 21-10: transporte com as caixas do dia
@@ -1965,7 +1971,7 @@ function painelPlano(){ state._quadroPre=null; state._trPre=null; const ver=area
         ep?el('div',{style:'display:inline-block;margin-bottom:4px;padding:3px 10px;border-radius:6px;font-weight:900;font-size:15px;letter-spacing:.04em;'+(ep.urg?'background:#fde047;color:#7f1d1d':'background:#f97316;color:#1c0a00')},
           (ep.urg?'🚨 URGENTE':'🔥 PRIORITÁRIO')+(ep.data?' · entrega '+ep.data.slice(8,10)+'/'+ep.data.slice(5,7):'')):null,
         el('b',{},t.comp?(t.qtd?'🧰 '+t.qtd+(Number(t.qtd)===1?' jogo':' jogos'):'🧰 quantos der'):(t.serie||(t.semNum?'📝 '+(t.qtd?('faltam '+Math.max(0,t.qtd-(t._feitas||0))+' de '+t.qtd):'sem número'+(t._feitas?' · '+t._feitas+' feitas':'')):'🆕 Estrutura nova'))), el('span',{},t.artigo),
-        el('small',{},(t._vem?'↪ vem de '+t._vem.slice(8,10)+'/'+t._vem.slice(5,7)+' · ':'')+t.operacao),
+        el('small',{},(k==='urg'&&t.turno?(t.turno==='T1'?'1.º turno':'2.º turno')+' · ':'')+(t._vem?'↪ vem de '+t._vem.slice(8,10)+'/'+t._vem.slice(5,7)+' · ':'')+t.operacao),
         t._esp?el('small',{style:'color:#fde68a;font-weight:800'},'⏸ falta '+t._esp.material.toLowerCase()+(t._esp.desde?' (desde '+t._esp.desde.slice(8,10)+'/'+t._esp.desde.slice(5,7)+')':'')+' — quando chegar, toca para continuar'):null,
         // 23-10: ela — "coloca também aqui «⏱ tempo gasto / 🎯 tempo objetivo»" (contas feitas no PC, indicadores-quiosque.json → tarefas)
         (()=>{ const q=state._indQ&&state._indQ.tarefas&&state._indQ.tarefas[t.id]; if(!q) return null; const fh=h=>String(Math.round(h*10)/10).replace('.',',')+' h';
@@ -2304,7 +2310,8 @@ function stockQtdArtigo(artigo){
   let srv=[]; try{ srv=JSON.parse(localStorage.getItem(LS.stockmap)||'[]'); }catch(e){}
   let net=0;
   srv.concat(loadStockQ()).forEach(r=>{ if((r.Artigo||r.artigo)!==artigo) return;
-    const q=parseInt(String(r.NumSerie||r.numSerie||'').replace(/[^\d]/g,''))||0;
+    // 05-11-2026: «2*AILLERONS94» = 2 caixas, «6» = 6, uma série («Prat104») = 1 (antes juntava os algarismos: 294, 104…)
+    const t=String(r.NumSerie||r.numSerie||'').trim(), mq=t.match(/^(\d+)\s*\*/), q=mq?parseInt(mq[1],10):(/^\d+$/.test(t)?parseInt(t,10):(t?1:0));
     net += /entra/i.test(r.Movimento||r.movimento||'') ? q : -q; });
   return Math.max(0,net);
 }
