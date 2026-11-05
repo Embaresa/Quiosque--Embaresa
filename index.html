@@ -2583,6 +2583,7 @@ function podeComecarOutro(op, ignorar){
     if(!op) return true;
     if(/transp/i.test(String(op.seccao||'')+' '+String(op.unidade||''))) return true;
     const pin=String(op.pin||''); if(!pin) return true;
+    fecharParagensNoutros(op);   // 05-11: a paragem que a pessoa deixou aberta NOUTRO aparelho fecha a esta hora
     const fora=a=>/^(logistica|transporte)$/i.test(String(a||'').trim());
     const meus=[];
     (state.jobs||[]).forEach(j=>{ if(j===ignorar || j.status==='done' || j.transp || fora(j.artigo)) return;
@@ -3183,7 +3184,9 @@ function pedirSaidaRemota(t,pin){ const url=(state.cfg&&state.cfg.urlTrabAbertos
 function aplicarSaidasRemotas(rows){ let mudou=false; const eu=deviceName();
   let feitas={}; try{ feitas=JSON.parse(localStorage.getItem('q_saidas_feitas')||'{}'); }catch(e){}
   (rows||[]).forEach(x=>{ const m=String(x.Estado||'').match(/^sair:([^:]+):(\d+)$/); if(!m || String(x.Dispositivo||'')!==eu) return;
-    const chave=x.ID+'|'+m[1]+'|'+m[2]; if(feitas[chave]) return; feitas[chave]=1;
+    const ehPert=/^PERT-/.test(String(x.JobID||''));   // 05-11: pedido para fechar uma PARAGEM (ver fecharParagensNoutros)
+    const chave=(ehPert?'P|':'')+x.ID+'|'+m[1]+'|'+m[2]; if(feitas[chave]) return; feitas[chave]=1;
+    if(ehPert){ if(fecharParagemRemota(m[1],Number(m[2]))) mudou=true; return; }
     const j=(state.jobs||[]).find(y=>String(y.id)===String(x.JobID) && y.status!=='done'); if(!j) return;
     const ts=Number(m[2]); let aqui=false;
     (j.workers||[]).forEach(w=>{ if(String(w.pin)===m[1] && !w.endTs && w.startTs<ts){ if(w.status==='paused') closeWorkerPause(w); w.endTs=Math.min(ts,nowTs()); w.status='parado';
@@ -3191,6 +3194,38 @@ function aplicarSaidasRemotas(rows){ let mudou=false; const eu=deviceName();
     if(aqui){ if(!(j.workers||[]).some(w=>!w.endTs)){ j.status='done'; pushTrabAberto(j,'fechado'); } else pushTrabAberto(j,'aberto',true); } });
   try{ localStorage.setItem('q_saidas_feitas',JSON.stringify(feitas)); }catch(e){}
   if(mudou) save(); return mudou; }
+// 05-11-2026: ela — «2 trabalhos ao mesmo tempo». O A. Rocha tinha a paragem «Preparação de material para Embalamentos no cliente»
+// aberta no Aparelho-PEAS desde as 14:16 e começou o embalamento da EM2627 no Zebra às 14:34. A paragem só fechava sozinha no MESMO
+// aparelho (fecharParagemAoComecar), e as paragens não vão para a tabela dos trabalhos abertos. Agora, ao começar, este aparelho lê os
+// batimentos ao vivo (os mesmos do Painel); se a pessoa está numa PARAGEM noutro aparelho, escreve para esse aparelho uma linha
+// «sair:PIN:hora» (JobID PERT-PIN) e logo a seguir «fechado» (para ninguém a tomar por um trabalho). O aparelho dono fecha a paragem
+// À HORA em que começou aqui (fecharParagemRemota).
+const URL_ATIVOS_LER_Q="https://defaultcade90c14fe343a3860494c20418f8.fb.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/25/workflows/069eb12336d64249944e6817769e30a0/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=OKJIOr5MNnIodo6EdDMn8iv2rxNxthIuOC8VkZPPFKw";
+async function fecharParagensNoutros(op){ try{
+  const url=(state.cfg&&state.cfg.urlTrabAbertos)||null, ler=(state.cfg&&state.cfg.urlAtivosLer)||URL_ATIVOS_LER_Q;
+  if(!url||!op||!op.pin||!op.nome||window.__TESTE) return;
+  const ts=nowTs(), eu=deviceName(), meu=curto(op.nome), pin=String(op.pin);
+  const r=await fetch(ler,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}); const jj=await r.json();
+  const linhas=jj.linhas||jj.value||(Array.isArray(jj)?jj:[]), rec={};
+  linhas.forEach(l=>{ const d=String(l.Dispositivo||l.dispositivo||''), t=Date.parse(l.Momento||l.momento||0)||0; if(!d||d===eu) return;
+    if(!rec[d]||t>rec[d].t) rec[d]={t,dados:(l.Dados!=null?l.Dados:(l.dados!=null?l.dados:'[]'))}; });
+  Object.keys(rec).forEach(d=>{ if(ts-rec[d].t>25*60000) return; let ws=[]; try{ ws=JSON.parse(rec[d].dados)||[]; }catch(e){}
+    if(!ws.some(w=>/^PARAGEM:/i.test(String(w.operacao||'')) && String(w.opCurto||'')===meu)) return;
+    const base={ ID:d+'|PERT-'+pin+'-'+ts, Dispositivo:d, JobID:'PERT-'+pin, Data:dstr(ts), Programa:'', Artigo:'', Operacao:'(fechar paragem)', Unidade:'',
+      Series:'', Operadores:meu, Pins:pin, DataHoraRegisto:new Date().toLocaleString('pt-PT') };
+    const env=e=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({},base,{Estado:e}))});
+    env('sair:'+pin+':'+ts).then(()=>env('fechado')).catch(()=>{});
+    toast(meu+': a paragem no aparelho '+d+' fica fechada às '+hhmm(ts),'ok'); });
+}catch(e){} }
+function fecharParagemRemota(pin, ts){ let n=0;
+  (state.perts||[]).filter(p=>String(p.pin)===String(pin) && p.startTs<ts).forEach(p=>{ const fim=Math.min(ts,nowTs());
+    enqueuePerturbacao(pertRecord(p.op,p.motivo,p.startTs,fim));
+    (state.jobs||[]).forEach(j=>(j.workers||[]).forEach(w=>{ if(w.endTs || w.status!=='paused') return; const u=w.pauses[w.pauses.length-1];
+      if(!(u && !u.end && u.pert===p.id)) return; u.end=fim; w.pauseMotivo=null; w.endTs=fim; w.status='parado'; enqueueRegisto(j,w,false);
+      if(!(j.workers||[]).some(z=>!z.endTs)){ j.status='done'; pushTrabAberto(j,'fechado'); } else pushTrabAberto(j,'aberto',true); }));
+    state.perts=state.perts.filter(z=>z.id!==p.id); n++;
+    toast((p.opCurto||curto(p.op||''))+' começou um trabalho noutro aparelho — paragem fechada às '+hhmm(fim),'ok'); });
+  if(n){ saveP(); save(); } return n; }
 function syncTrabAbertos(){ if(_deLado) return; reenviarFechos(); (state.jobs||[]).forEach(j=>{ if(j.status!=='done') pushTrabAberto(j,'aberto'); }); }
 
 // A data chega da folha como número de série do Excel.
