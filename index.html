@@ -1189,8 +1189,23 @@ function estruturasDe(art){ const a=artEstrutura(art).trim().toLowerCase(), m=ne
   (state.jobs||[]).forEach(j=>(j.series||[]).forEach(s=>{ s=String(s).trim().toUpperCase();   // trabalhos deste aparelho, ainda sem linhas na folha
     if(isEstr(s) && artEstrutura(j.artigo).trim().toLowerCase()===a && !m.has(s)) m.set(s,{ serie:s, inicio:j.dia||'', quem:(j.workers||[]).map(w=>w.opCurto).join(', '), sold:'', soldTs:0, quemSold:'', uso:'', usoEm:'', etapas:new Set() }); }));
   return [...m.values()].sort((p,q)=>p.serie.localeCompare(q.serie)); }
+// 05-11-2026: ela — «só um EM de cada vez» na soldadura → o que tem a soldadura começada e por acabar, de TODOS os tipos:
+// caixas EM (soldadura a decorrer) e estruturas S… (sem «sold», ainda não usadas)
+function estruturasPorAcabar(){ const arts=new Set(), out=[], vistos=new Set();
+  fasesValidasQ().forEach(r=>{ if(r.Fase==='ESTR' && isEstr(r.Serie) && !/^COMP:/i.test(String(r.Artigo||''))) arts.add(artEstrutura(r.Artigo)); });
+  (state.jobs||[]).forEach(j=>{ if(j.status!=='done' && (j.series||[]).some(isEstr)) arts.add(artEstrutura(j.artigo)); });
+  arts.forEach(a=>estruturasDe(a).filter(x=>!x.uso && !x.sold).forEach(x=>{ if(!vistos.has(x.serie)){ vistos.add(x.serie); out.push(Object.assign({},x,{art:a})); } }));
+  [...new Set((state.enc||[]).map(e=>e.artigo).filter(Boolean))].forEach(a=>{ if(!usaEstruturas(fluxoDoArtigo(a))) return;
+    caixasDoArtigo(a).filter(c=>c.fase==='sold' && c.decorrer).forEach(c=>{ const s=String(c.e.serie).toUpperCase(); if(vistos.has(s)) return; vistos.add(s);
+      out.push({ serie:s, art:a, ehCaixa:true, inicio:(c.ult&&c.ult.dia)||'', quem:(c.ult&&c.ult.quem)||'' }); }); });
+  // ela: «só pode haver estruturas a meio se a anterior for interrompida por falta de material» → as que estão À ESPERA não contam
+  return out.filter(x=>!esperaDe(x.art, x.serie)); }
+function txtEstrPorAcabar(meio){ const dm=s=>s?String(s).slice(8,10)+'/'+String(s).slice(5,7):'';
+  return 'Ainda há uma SOLDADURA por acabar:\n\n'+meio.map(x=>'   '+x.serie+' — '+(x.ehCaixa?x.art:nomeEstrutura(x.art))+'\n      '+(x.ehCaixa?'último trabalho a ':'começada a ')+dm(x.inicio)+(x.quem?' ('+x.quem+')':'')).join('\n')+
+    '\n\nSó se solda UMA de cada vez.\nContinua essa (ou ajuda quem lá está), ou faz COMPONENTES PARA STOCK (🧰).\n\nSó pode ficar a meio se parar por FALTA DE MATERIAL (marca «⏸ falta material»).\nSe essa já não existe ou já está acabada, fala com a Sónia.'; }
 function escolherEstruturaNova(f){ state.draft._estrLiga=false; const meio=estruturasDe(state.draft.artigo).filter(x=>!x.uso && !x.sold);
   if(meio.length){ state._pcont={ f, serie:null, novaEstr:true, esta:false, outras:meio.map(x=>x.serie) }; render(); return; }
+  const outras=estruturasPorAcabar(); if(outras.length){ alert(txtEstrPorAcabar(outras)); return; }   // 05-11: uma de outro tipo por acabar
   escolherCaixaFase(f, novoNumEstr(), true); }
 function caixasDoArtigo(art){ const num=s=>parseInt(String(s).replace(/\D/g,''),10)||0;
   return (state.enc||[]).filter(e=>e.artigo===art).map(e=>Object.assign({e},estadoCaixa(art,e))).sort((a,b)=>num(a.e.serie)-num(b.e.serie)); }
@@ -1253,10 +1268,11 @@ function renderPercurso(w){
       const u=c&&c.ult&&c.ult.dia?' · último trabalho a '+c.ult.dia.slice(8,10)+'/'+c.ult.dia.slice(5,7)+(c.ult.quem?' ('+c.ult.quem+')':''):xe&&xe.inicio?' · começada a '+xe.inicio.slice(8,10)+'/'+xe.inicio.slice(5,7)+(xe.quem?' ('+xe.quem+')':''):'';
       return (et.size?'etapas já feitas: '+[...et].sort((a,b)=>a-b).join(', '):'já tem trabalho começado')+u; };
     const vai=(s,nota)=>{ state._pcont=null; state.draft._notaCont=nota||null; if(s!==pc.serie) state.draft._estrLiga=false; escolherCaixaFase(pc.f,s,true); };
-    w.append(el('p',{class:'lbl',style:'font-size:20px'},pc.novaEstr?'Vais soldar uma estrutura NOVA ou continuar uma que está a meio?':'A caixa '+pc.serie+' é uma caixa nova ou a continuação de um trabalho anterior?'));
+    // 05-11-2026: ela — «não deixar começar uma nova estrutura enquanto a anterior não está terminada» → com uma a meio, só se continua
+    w.append(el('p',{class:'lbl',style:'font-size:20px'},pc.novaEstr?'Há uma estrutura por acabar — continua-a. Só se começa outra depois de acabar esta.':'A caixa '+pc.serie+' é uma caixa nova ou a continuação de um trabalho anterior?'));
     const g=el('div',{class:'pc-cands'});
     const bt=(tit,sub,fn,run)=>{ const b=el('button',{class:'pc-cx'+(run?' run':''),onclick:fn}); b.append(imgFase(fl,pc.f.id,art), el('b',{},tit), el('small',{},sub)); g.append(b); };
-    if(pc.novaEstr) bt('🆕 Estrutura NOVA — começo do zero', 'o quiosque dá-lhe o número', ()=>vai(novoNumEstr()));
+    if(pc.novaEstr){ /* 05-11: sem «Estrutura NOVA» enquanto houver uma a meio */ }
     else if(pc.esta) bt('🔁 Continuação — continuo a '+pc.serie, info(pc.serie), ()=>vai(pc.serie), true);
     else bt('🆕 Caixa NOVA — começo do zero', 'a '+pc.serie+' ainda não tem trabalho nesta fase', ()=>vai(pc.serie));
     if(pc.novaEstr) pc.outras.forEach(s=>bt('🔁 Continuo a estrutura '+s, info(s), ()=>vai(s), true));
@@ -1348,6 +1364,35 @@ function esperaDe(artigo, serie){ const s=String(serie||'').trim().toUpperCase()
 function registarEspera(j, material, fim){ const a=lerFases(), t=nowTs(), quem=(j.workers||[]).map(w=>w.opCurto).filter(Boolean).join(', ');
   (j.series||[]).forEach(s=>a.push({ ID:(fim?'EF-':'ES-')+t+'-'+s, Data:dstr(t), Artigo:j.artigo, Serie:s, Fase:fim?'ESPERA-FIM':'ESPERA', Operacao:j.operacao, Quem:quem, Dispositivo:deviceName(), DataHoraRegisto:new Date().toLocaleString('pt-PT'), Job:material||'' }));
   gravarFases(a); syncFases(); }
+// 05-11-2026: ela — «temos que dar ênfase às etapas porque eles, mesmo não fazendo, colocam tudo: o Hilenio apenas ajudou o Nuno em 2
+// etapas mas marcou todas como se as tivesse feito» (37 min e as 5 etapas da soldadura, que valem 11 h). Ao avançar, compara o peso das
+// etapas marcadas (no tempo objetivo) com o tempo que esteve no trabalho; se valem mais do triplo, PERGUNTA com as contas à vista.
+// porCaixa = [ [nºs marcados na caixa 1], [na caixa 2], … ]
+function avisoTempoEtapas(j, porCaixa){ try{
+  const et=etapasDe(j.artigo,j.operacao)||[], obj=objetivoMsJob(j), nC=Math.max(1,(j.series||[]).length);
+  const todas=[].concat(...porCaixa); if(!obj || !todas.length) return null;
+  const valem=porCaixa.reduce((t,L)=>t+(obj/nC)*et.filter(e=>L.includes(Number(e.n))).reduce((s,e)=>s+(Number(e.peso)||0),0),0), trab=activeMs(j);
+  if(valem<=Math.max(3*trab, 60*60000)) return null;
+  const h=ms=>{ const m=Math.round(ms/60000); return m<60?m+' min':(Math.floor(m/60)+' h'+(m%60?' '+String(m%60).padStart(2,'0'):'')); };
+  return '⚠ ATENÇÃO: estas etapas costumam levar cerca de '+h(valem)+'.\nNeste trabalho estiveram só '+h(trab)+'.\nAjudar um colega numa parte NÃO é acabar a etapa toda.'; }catch(e){ return null; } }
+// 05-11-2026: ela — «põe as etapas em grande para eles e o melhor era antes de fechar aparecer um ecrã com as etapas que fizeram, tipo
+// uma janela popup» → janela por cima de tudo, em letra grande: ✅ o que marcaram e ⬜ o que fica por fazer (e o aviso do tempo).
+// Só avança com «Sim, foi isto que fiz»; «Não, corrigir» fecha a janela e fica nas etapas.
+// o = { titulo, caixas:[{ nome, feitas:[texto], falta:[texto] }], aviso, ok() }
+function popupEtapas(o){
+  const fundo=el('div',{id:'popEtapas',style:'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;padding:14px'});
+  const cx=el('div',{style:'background:#0f1d2a;border:3px solid #34d399;border-radius:20px;max-width:780px;width:100%;max-height:94vh;overflow:auto;padding:22px 22px 18px;box-shadow:0 20px 60px rgba(0,0,0,.6)'});
+  cx.append(el('div',{style:'font-size:26px;font-weight:900;line-height:1.25;margin-bottom:12px;color:#e2e8f0'},o.titulo));
+  (o.caixas||[]).forEach(c=>{ if(c.nome) cx.append(el('div',{style:'font-size:24px;font-weight:900;color:#26c9e2;margin:12px 0 6px'},'📦 '+c.nome));
+    if(c.feitas.length) c.feitas.forEach(t=>cx.append(el('div',{style:'font-size:24px;font-weight:800;color:#d1fae5;background:#0f3b2c;border:2px solid #34d399;border-radius:12px;padding:12px 16px;margin-bottom:8px'},'✅ '+t)));
+    else cx.append(el('div',{style:'font-size:22px;font-weight:800;color:#fde68a;background:#2a2410;border:2px solid #eab308;border-radius:12px;padding:12px 16px;margin-bottom:8px'},'Nenhuma etapa acabada'));
+    (c.falta||[]).forEach(t=>cx.append(el('div',{style:'font-size:20px;color:#94a3b8;border:2px dashed #3b5568;border-radius:12px;padding:10px 16px;margin-bottom:8px'},'⬜ '+t+' — fica por fazer'))); });
+  if(o.aviso) cx.append(el('div',{style:'font-size:20px;font-weight:800;line-height:1.35;color:#fecaca;background:#3a1114;border:2px solid #ef4444;border-radius:12px;padding:12px 16px;margin:12px 0 4px;white-space:pre-line'},o.aviso));
+  const fechar=()=>fundo.remove();
+  const g=el('div',{style:'display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px'});
+  g.append(el('button',{class:'big ghost',style:'margin:0;font-size:20px',onclick:fechar},'✏️ Não, corrigir'));
+  g.append(el('button',{class:'big ok',style:'margin:0;font-size:20px',onclick:()=>{ fechar(); o.ok(); }},'✅ Sim, foi isto que fiz'));
+  cx.append(g); fundo.append(cx); const ant=document.getElementById('popEtapas'); if(ant) ant.remove(); document.body.append(fundo); }
 function blocoEtapas(w,j){ const et=etapasDe(j.artigo,j.operacao); if(!et) return null;
   const feitas=etapasFeitas(j.artigo,(j.series||[])[0],j.operacao,j.id);
   const doStock=etapasDoStock(j.artigo,(j.series||[])[0],j.operacao), doJob=etapasDoJob(j);
@@ -1356,11 +1401,11 @@ function blocoEtapas(w,j){ const et=etapasDe(j.artigo,j.operacao); if(!et) retur
   const sel=state._etSel.s, stk=state._etSel.stk||(state._etSel.stk=[]);
   w.append(el('p',{class:'lbl'},'O que ficou feito neste turno? (toca nas etapas que ACABARAM)'));
   // 27-10-2026: ela — o Nuno ia mudar de trabalho, «só há duas opções, acaba o turno ou falta de material», e marcou as 5 etapas da EM2380 para conseguir sair
-  w.append(el('p',{class:'muted',style:'font-size:14px;margin:-4px 0 10px'},'⚠ Marca só o que ficou MESMO acabado. Se vais mudar de trabalho, não marques o resto — no passo seguinte escolhes «🔀 Vou mudar de trabalho».'));
+  w.append(el('div',{class:'flag',style:'border-color:#ef4444;background:#3a1114;color:#fecaca;font-size:17px;font-weight:700;line-height:1.35;margin:0 0 12px'},'⚠ Marca SÓ as etapas que ficaram ACABADAS e em que TU trabalhaste neste turno. Ajudar um colega numa parte NÃO é acabar a etapa. O que não acabaste não marques — no passo seguinte dizes porquê.'));
   const l=el('div',{class:'list',style:'margin-bottom:12px'});
   et.forEach(e=>{ const n=Number(e.n), ja=feitas.has(n), on=sel.includes(n), c=compParaEtapa(j.artigo,j.operacao,e.nome), st=!ja&&stk.includes(n);
-    l.append(el('button',{class:'item',style:(ja||st?'opacity:.55;':'')+(ja?'text-decoration:line-through;':'')+(on?'border-color:#34d399;background:#0f3b2c;':''),onclick:()=>{ if(ja){ toast(doStock.has(n)?'Esta etapa veio do stock':'Esta etapa já foi feita noutro turno','warn'); return; } if(st){ toast('Está marcada "veio do stock" — toca no botão amarelo para mudar','warn'); return; } const i=sel.indexOf(n); if(i>=0) sel.splice(i,1); else sel.push(n); render(); }},
-      el('span',{class:'t'},el('b',{},(on?'✅ ':(st||doStock.has(n))?'📦 ':ja?'✔ ':'')+e.n+'. '+e.nome),el('small',{},doStock.has(n)?'veio do stock':ja?'já feita':st?'veio do stock — não conta para esta equipa':(doJob.has(n)?'✔ já marcada neste trabalho (se também trabalhaste nela, toca) · ':'')+Math.round(Number(e.peso)*100)+' % do trabalho'))));
+    l.append(el('button',{class:'item etapa-grande',style:'padding:18px 18px;min-height:76px;border-width:2px;'+(ja||st?'opacity:.55;':'')+(ja?'text-decoration:line-through;':'')+(on?'border-color:#34d399;background:#0f3b2c;':''),onclick:()=>{ if(ja){ toast(doStock.has(n)?'Esta etapa veio do stock':'Esta etapa já foi feita noutro turno','warn'); return; } if(st){ toast('Está marcada "veio do stock" — toca no botão amarelo para mudar','warn'); return; } const i=sel.indexOf(n); if(i>=0) sel.splice(i,1); else sel.push(n); render(); }},
+      el('span',{class:'t'},el('b',{style:'font-size:24px;line-height:1.25'},(on?'✅ ':(st||doStock.has(n))?'📦 ':ja?'✔ ':'⬜ ')+e.n+'. '+e.nome),el('small',{style:'font-size:15px'},doStock.has(n)?'veio do stock':ja?'já feita':st?'veio do stock — não conta para esta equipa':(doJob.has(n)?'✔ já marcada neste trabalho (se também trabalhaste nela, toca) · ':'')+Math.round(Number(e.peso)*100)+' % do trabalho'))));
     if(c && !ja && (stockComp(c.id)>0 || st)){ const n0=stockComp(c.id);   // 16-10: só se há jogos prontos — na EM2240 marcaram "veio do stock" com o stock a zero
       l.append(el('button',{class:'item',style:'margin:-6px 0 4px 26px;padding:8px 12px;border-left:4px solid #eab308;'+(st?'background:#3b2f0b;':''),onclick:()=>{ const i=stk.indexOf(n); if(i>=0) stk.splice(i,1); else { stk.push(n); const k=sel.indexOf(n); if(k>=0) sel.splice(k,1); } render(); }},
         el('span',{class:'t'},el('b',{},(st?'☑ ':'☐ ')+'📦 '+c.nome+' veio do stock'),el('small',{},'em stock: '+Math.max(0,n0)+' jogo(s)'+(n0<=0?' — sem stock registado':''))))); } });
@@ -1381,6 +1426,27 @@ function etapasDoJob(j){ const s=String((j.series||[])[0]||'').toUpperCase(), m=
 function registarEtapasSerie(j, serie, nums, quem){ if(!nums||!nums.length) return; const a=lerFases(), t=nowTs();
   nums.forEach(n=>a.push({ ID:'ET-'+t+'-'+serie+'-'+n, Data:dstr(t), Artigo:j.artigo, Serie:serie, Fase:'E'+n, Operacao:j.operacao, Quem:quem, Dispositivo:deviceName(), DataHoraRegisto:new Date().toLocaleString('pt-PT'), Job:j.id }));
   gravarFases(a); syncFases(); }
+// 05-11-2026: ela — «quando escolhem não, tem que haver a seguir um quadro para dizerem qual a razão: fim de turno, falta de material
+// para concluir, ou ordem superior para avançar para outro trabalho» e «tem que ser igual para tudo» → o MESMO quadro em todos os fins
+// de fase sem a caixa acabada (uma caixa com etapas, várias caixas, e sem etapas). O motivo fica no registo: «[não acabada: …]».
+// fim(motivo, material|null) faz a saída; st.esp = está a escolher o material. Devolve true no ecrã do material.
+function quadroMotivoNao(w, o, st, fim){
+  if(st.esp){
+    w.append(el('p',{class:'lbl',style:'font-size:20px'},'⏸ Que material falta para acabar '+o.alvo+'?'));
+    const g=el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:10px'});
+    MATERIAIS_ESPERA.forEach(([ic,m])=>g.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:4px;padding:16px;border-left:6px solid #eab308',onclick:()=>{ toast('⏸ Fica à espera de '+m.toLowerCase(),'ok'); fim('falta de '+m.toLowerCase(), m); }},
+      el('span',{style:'font-size:30px;line-height:1'},ic), el('b',{style:'font-size:18px'},m))));
+    w.append(g, el('p',{class:'muted',style:'font-size:13px'},'Sai do plano de hoje e fica em «⏸ À espera de material». Quando o material chegar, quem voltar a começar tira-a da espera.'),
+      el('button',{class:'big ghost',style:'margin-top:10px',onclick:()=>{ st.esp=false; render(); }},'⬅ Voltar'));
+    return true; }
+  w.append(el('p',{class:'lbl',style:'font-size:20px;margin-top:6px'},'Porque é que '+o.alvo+(o.pl?' não ficaram acabadas?':' não ficou acabada?')));
+  const gq=el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px'});
+  const bt=(ic,tit,sub,cor,fundo,corT,fn)=>gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid '+cor+(fundo?';background:'+fundo:''),onclick:fn},
+    el('span',{style:'font-size:34px;line-height:1'},ic), el('b',{style:'font-size:19px'+(corT?';color:'+corT:'')},tit), el('small',{style:'color:var(--soft)'},sub)));
+  bt('🕔','Fim de turno','o próximo turno continua','#34d399',null,null,()=>fim('fim de turno',null));
+  bt('⏸','Falta de material','não dá para acabar até chegar (alumínio, lona…)','#eab308','#2a2410','#fde68a',()=>{ st.esp=true; render(); });
+  bt('🔀','Ordem superior','mandaram avançar para outro trabalho — fica a meio','#60a5fa',null,'#bfdbfe',()=>{ toast('🔀 Fica a meio — continua-se depois','ok'); fim('ordem superior para outro trabalho',null); });   // 27-10-2026 (EM2380)
+  w.append(gq); return false; }
 function renderFimFaseVarias(w,j,f){
   const et=etapasDe(j.artigo,j.operacao)||[], fl=fluxoDoArtigo(j.artigo), prox=proxFase(fl,f.id), series=(j.series||[]).slice();
   if(!state._fv||state._fv.j!==j.id) state._fv={j:j.id,p:1,sel:{}};
@@ -1393,22 +1459,26 @@ function renderFimFaseVarias(w,j,f){
   if(V.p===1){
     w.append(passo('Passo 1 de 2 · '+series.length+' caixas'));
     w.append(el('p',{class:'lbl'},'Toca nas etapas que ACABARAM neste turno, caixa a caixa:'));
-    w.append(el('p',{class:'muted',style:'font-size:14px;margin:-4px 0 10px'},'⚠ Marca só o que ficou MESMO acabado. Se vais mudar de trabalho, não marques o resto — no passo seguinte escolhes «🔀 Vou mudar de trabalho».'));   // 27-10-2026 (EM2380)
+    w.append(el('div',{class:'flag',style:'border-color:#ef4444;background:#3a1114;color:#fecaca;font-size:17px;font-weight:700;line-height:1.35;margin:0 0 12px'},'⚠ Marca SÓ as etapas que ficaram ACABADAS e em que TU trabalhaste neste turno. Ajudar um colega numa parte NÃO é acabar a etapa. O que não acabaste não marques — no passo seguinte dizes porquê.'));   // 27-10-2026 (EM2380)
     const tb=el('div',{style:'overflow-x:auto;margin-bottom:12px'}), t=el('table',{style:'border-collapse:separate;border-spacing:6px;min-width:100%'});
     const hd=el('tr',{},el('th',{style:'text-align:left;color:var(--soft);font-size:13px'},'Caixa'));
-    et.forEach(e=>{ const n=Number(e.n); hd.append(el('th',{style:'font-size:12px;color:var(--soft);font-weight:700;vertical-align:bottom;max-width:120px'},
+    et.forEach(e=>{ const n=Number(e.n); hd.append(el('th',{style:'font-size:17px;color:#e2e8f0;font-weight:800;vertical-align:bottom;max-width:160px'},
       el('div',{},e.n+'. '+e.nome),
       el('button',{class:'mini',style:'margin-top:4px;font-size:11px',onclick:()=>{ const al=series.filter(s=>!jaPronta(s)&&!feitas(s).has(n)); const todas=al.every(s=>sel(s).includes(n)); al.forEach(s=>{ const L=sel(s), i=L.indexOf(n); if(todas){ if(i>=0) L.splice(i,1); } else if(i<0) L.push(n); }); render(); }},'todas'))); });
     hd.append(el('th',{})); t.append(hd);
     series.forEach(s=>{ const pr=jaPronta(s), fe=feitas(s), L=sel(s), tr=el('tr',{});
-      tr.append(el('td',{style:'font-weight:800;font-size:18px;white-space:nowrap;padding-right:6px'},s+(pr?' ✅':'')));
+      tr.append(el('td',{style:'font-weight:900;font-size:24px;white-space:nowrap;padding-right:6px'},s+(pr?' ✅':'')));
       et.forEach(e=>{ const n=Number(e.n), ja=pr||fe.has(n), on=L.includes(n);
-        tr.append(el('td',{},el('button',{style:'width:100%;min-width:64px;height:54px;border-radius:12px;font-size:22px;font-weight:800;cursor:pointer;border:2px solid '+(on?'#34d399':ja?'#334155':'#3b5568')+';background:'+(on?'#0f3b2c':ja?'#1e293b':'#0f1d2a')+';color:'+(ja?'#64748b':'#e2e8f0'),
+        tr.append(el('td',{},el('button',{style:'width:100%;min-width:76px;height:72px;border-radius:14px;font-size:30px;font-weight:800;cursor:pointer;border:2px solid '+(on?'#34d399':ja?'#334155':'#3b5568')+';background:'+(on?'#0f3b2c':ja?'#1e293b':'#0f1d2a')+';color:'+(ja?'#64748b':'#e2e8f0'),
           onclick:()=>{ if(ja){ toast(pr?'Esta caixa já está pronta':'Esta etapa já foi feita nesta caixa','warn'); return; } const i=L.indexOf(n); if(i>=0) L.splice(i,1); else L.push(n); render(); }},ja?'✔':on?'✅':'⬜'))); });
       tr.append(el('td',{},pr?el('small',{style:'color:#34d399'},'já pronta'):el('button',{class:'mini',onclick:()=>{ const falta=et.map(e=>Number(e.n)).filter(n=>!fe.has(n)); const tudo=falta.every(n=>L.includes(n)); V.sel[s]=tudo?[]:falta; render(); }},'caixa toda')));
       t.append(tr); });
     tb.append(t); w.append(tb);
-    w.append(el('button',{class:'big ok',onclick:()=>{ const nada=series.every(s=>!sel(s).length); if(nada && !confirm('Não marcaste nenhuma etapa em nenhuma caixa.\n\nNão acabaste nenhuma etapa neste turno?')) return; V.p=2; render(); }},'Seguinte ➜'));
+    w.append(el('button',{class:'big ok',onclick:()=>{   // 05-11: janela com o que marcaram, caixa a caixa
+      const nm=n=>{ const e=et.find(x=>Number(x.n)===n); return n+'. '+(e?e.nome:''); };
+      popupEtapas({ titulo:'Confirma: o que TU acabaste neste turno', aviso:avisoTempoEtapas(j,series.map(s=>sel(s).slice())), ok:()=>{ V.p=2; render(); },
+        caixas:series.filter(s=>!jaPronta(s)).map(s=>{ const fe=feitas(s), L=sel(s).slice().sort((a,b)=>a-b);
+          return { nome:s, feitas:L.map(nm), falta:et.filter(e=>{ const n=Number(e.n); return !fe.has(n) && !L.includes(n); }).map(e=>e.n+'. '+e.nome) }; }) }); }},'Seguinte ➜'));
     return; }
   // passo 2: que caixas ficam prontas
   const falta=s=>{ const fe=feitas(s), L=sel(s); return et.filter(e=>{ const n=Number(e.n); return !fe.has(n) && !L.includes(n); }); };
@@ -1428,22 +1498,8 @@ function renderFimFaseVarias(w,j,f){
     const g=el('div',{class:'pc-cands'}), sim=el('button',{class:'pc-cx fim-sim',onclick:()=>{ gravar(); fecharProntas(); limpar(); state._qty=series.length; finishJob(j); }});
     sim.append(imgFase(fl,prox?prox.id:f.id,j.artigo), el('b',{},'✅ Terminar'), el('small',{},'as '+series.length+' caixas ficam prontas'));
     g.append(sim); w.append(g, voltar); return; }
-  if(V.esp){
-    w.append(el('p',{class:'lbl',style:'font-size:20px'},'⏸ Que material falta para acabar '+restam.join(', ')+'?'));
-    const g=el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:10px'});
-    MATERIAIS_ESPERA.forEach(([ic,m])=>g.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:4px;padding:16px;border-left:6px solid #eab308',onclick:()=>{
-      const w0=meuW(); gravar(); fecharProntas(); registarEspera(Object.assign({},j,{series:restam}),m); limpar(); toast('⏸ '+restam.join(', ')+' à espera de '+m.toLowerCase(),'ok'); state.jobPhase='menu'; if(w0) leaveWorker(j,w0); else render(); tirarProntas(); }},
-      el('span',{style:'font-size:30px;line-height:1'},ic), el('b',{style:'font-size:18px'},m))));
-    w.append(g, el('button',{class:'big ghost',style:'margin-top:10px',onclick:()=>{ V.esp=false; render(); }},'⬅ Voltar')); return; }
-  w.append(el('p',{class:'lbl',style:'font-size:20px;margin-top:6px'},'Porque é que '+(restam.length===1?'a caixa '+restam[0]+' não ficou acabada':'as caixas '+restam.join(', ')+' não ficaram acabadas')+'?'));
-  const gq=el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px'});
-  gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #34d399',onclick:()=>{ const w0=meuW(); gravar(); fecharProntas(); limpar(); state.jobPhase='menu'; if(w0) leaveWorker(j,w0); else render(); tirarProntas(); }},
-    el('span',{style:'font-size:34px;line-height:1'},'🕔'), el('b',{style:'font-size:19px'},'Acabou o meu turno'), el('small',{style:'color:var(--soft)'},'há material — o próximo turno continua')));
-  gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #eab308;background:#2a2410',onclick:()=>{ V.esp=true; render(); }},
-    el('span',{style:'font-size:34px;line-height:1'},'⏸'), el('b',{style:'font-size:19px;color:#fde68a'},'Falta material'), el('small',{style:'color:var(--soft)'},'não dá para continuar até chegar')));
-  gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #60a5fa',onclick:()=>{ const w0=meuW(); gravar(); fecharProntas(); limpar(); toast('🔀 '+restam.join(', ')+' ficam a meio — continua-se depois','ok'); state.jobPhase='menu'; if(w0) leaveWorker(j,w0); else render(); tirarProntas(); }},
-    el('span',{style:'font-size:34px;line-height:1'},'🔀'), el('b',{style:'font-size:19px;color:#bfdbfe'},'Vou mudar de trabalho'), el('small',{style:'color:var(--soft)'},'ficam a meio — continua-se mais tarde')));   // 27-10-2026 (EM2380)
-  w.append(gq, voltar); }
+  const sairV=(mot,m)=>{ const w0=meuW(); if(w0) w0.motivoNao=mot; gravar(); fecharProntas(); if(m) registarEspera(Object.assign({},j,{series:restam}),m); limpar(); state.jobPhase='menu'; if(w0) leaveWorker(j,w0); else render(); tirarProntas(); };
+  if(!quadroMotivoNao(w,{alvo:restam.length===1?'a caixa '+restam[0]:'as caixas '+restam.join(', '),pl:restam.length>1},V,sairV)) w.append(voltar); }
 function renderFimFase(w,j,f){
   if(!etapasDe(j.artigo,j.operacao)) return renderFimFaseSimples(w,j,f);
   if((j.series||[]).length>1 && !(j.series||[]).some(isEstr)) return renderFimFaseVarias(w,j,f);
@@ -1455,8 +1511,12 @@ function renderFimFase(w,j,f){
     const B=blocoEtapas(w,j);
     // 22-10-2026: ela — "o 2521 está terminado na soldadura, não entendo porque não está": as etapas 1-3 vieram do stock e o Hilenio
     // (5 h) e o William saíram sem marcar as 4 e 5 — a pergunta "não acabaste nenhuma?" não aparecia porque o stock contava como marcado.
-    w.append(el('button',{class:'big ok',style:'margin-top:4px',onclick:()=>{ const resto=B.et.filter(e=>{ const n=Number(e.n); return !B.feitas.has(n) && !B.stk.includes(n) && !B.doJob.has(n); });
-      if(!B.sel.length && !confirm((B.usos().length?'Só marcaste o que veio do stock.':'Não marcaste nenhuma etapa.')+'\n\nNão acabaste NENHUMA destas etapas neste turno?\n\n'+resto.map(e=>'   '+e.n+'. '+e.nome).join('\n')+'\n\nOK = não acabei nenhuma\nCancelar = voltar e marcar as que acabei')) return; P.p=2; render(); }},'Seguinte ➜'));
+    w.append(el('button',{class:'big ok',style:'margin-top:4px',onclick:()=>{   // 05-11: janela com o que marcaram (em vez das perguntas pequenas)
+      const nm=n=>{ const e=B.et.find(x=>Number(x.n)===n); return n+'. '+(e?e.nome:''); }, stkN=B.usos().map(u=>u.n);
+      const feitasT=B.sel.slice().sort((a,b)=>a-b).map(nm).concat(stkN.map(n=>nm(n)+' (veio do stock)'));
+      const falta=B.et.filter(e=>{ const n=Number(e.n); return !B.feitas.has(n) && !B.sel.includes(n) && !stkN.includes(n) && !B.stk.includes(n) && !B.doJob.has(n); }).map(e=>e.n+'. '+e.nome);
+      popupEtapas({ titulo:'Confirma: o que TU acabaste neste turno — '+(isEstr(serie)?'estrutura ':'caixa ')+(j.series||[]).join(', '), caixas:[{ nome:'', feitas:feitasT, falta }],
+        aviso:avisoTempoEtapas(j,[B.sel.slice()]), ok:()=>{ P.p=2; render(); } }); }},'Seguinte ➜'));
     return; }
   const B=blocoEtapas(el('div'),j), us=B.usos(), agora=new Set(B.sel.concat(us.map(u=>u.n))), doStock=etapasDoStock(j.artigo,serie,j.operacao);
   const faltam=B.et.filter(e=>{ const n=Number(e.n); return !B.feitas.has(n) && !agora.has(n) && !B.doJob.has(n) && !doStock.has(n); });
@@ -1481,30 +1541,12 @@ function renderFimFase(w,j,f){
     w.append(el('p',{class:'lbl'},'Ainda faltam '+faltam.length+' etapa(s) nesta '+oQue+':'));
     const l=el('div',{class:'list',style:'margin-bottom:10px'}); faltam.forEach(e=>l.append(el('div',{class:'item',style:'opacity:.8'},el('span',{class:'t'},el('b',{},'⬜ '+e.n+'. '+e.nome))))); w.append(l);
     const esp=esperaDe(j.artigo,serie);
-    if(P.esp){   // 21-10: falta material — qual?
-      w.append(el('p',{class:'lbl',style:'font-size:20px'},'⏸ Que material falta para acabar a '+oQue+' '+(j.series||[]).join(', ')+'?'));
-      const g=el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:10px'});
-      MATERIAIS_ESPERA.forEach(([ic,m])=>g.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:4px;padding:16px;border-left:6px solid #eab308',onclick:()=>{
-          const w0=meuW(); gravarEtapas(); registarEspera(j,m); limpar(); toast('⏸ Fica à espera de '+m.toLowerCase(),'ok'); state.jobPhase='menu'; if(w0) leaveWorker(j,w0); else render(); }},
-        el('span',{style:'font-size:30px;line-height:1'},ic), el('b',{style:'font-size:18px'},m))));
-      w.append(g);
-      w.append(el('p',{class:'muted',style:'font-size:13px'},'A '+oQue+' sai do plano de hoje e fica em «⏸ À espera de material». Quando o material chegar, quem a voltar a começar tira-a da espera.'));
-      w.append(el('button',{class:'big ghost',style:'margin-top:10px',onclick:()=>{ P.esp=false; render(); }},'⬅ Voltar'));
-      return; }
-    w.append(el('p',{class:'muted',style:'font-size:13px'},'A '+oQue+' fica na '+f.nome+' para o próximo turno. Se afinal acabaste alguma destas, volta atrás e marca-a.'));
-    if(esp) w.append(el('div',{class:'flag',style:'border-color:#eab308;color:#fde68a;margin-bottom:8px'},'⏸ Esta '+oQue+' está à espera de '+esp.material.toLowerCase()+(esp.desde?' desde '+esp.desde.slice(8,10)+'/'+esp.desde.slice(5,7):'')+'.'));
-    // 21-10: ela — "eles vão fazer outro EV e vai ser a mesma coisa: como é que o quiosque sabe que fica parado por falta de
-    // material?" → já não é um botão a mais que se pode saltar: com etapas por fazer, PERGUNTA-SE porquê (turno ou material).
-    w.append(el('p',{class:'lbl',style:'font-size:20px;margin-top:6px'},'Porque é que a '+oQue+' não ficou acabada?'));
-    const gq=el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px'});
-    gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #34d399',onclick:sair},
-      el('span',{style:'font-size:34px;line-height:1'},'🕔'), el('b',{style:'font-size:19px'},'Acabou o meu turno'), el('small',{style:'color:var(--soft)'},'há material — o próximo turno continua')));
-    gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #eab308;background:#2a2410',onclick:()=>{ P.esp=true; render(); }},
-      el('span',{style:'font-size:34px;line-height:1'},'⏸'), el('b',{style:'font-size:19px;color:#fde68a'},'Falta material'), el('small',{style:'color:var(--soft)'},'não dá para continuar até chegar (alumínio, lona…)')));
-    gq.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:6px;padding:18px;border-left:6px solid #60a5fa',onclick:()=>{ toast('🔀 A '+oQue+' fica na '+f.nome+' — tu ou um colega continuam depois','ok'); sair(); }},
-      el('span',{style:'font-size:34px;line-height:1'},'🔀'), el('b',{style:'font-size:19px;color:#bfdbfe'},'Vou mudar de trabalho'), el('small',{style:'color:var(--soft)'},'a '+oQue+' fica a meio — continua-se mais tarde')));   // 27-10-2026 (EM2380)
-    w.append(gq);
-    w.append(voltar); return; }
+    if(!P.esp){ w.append(el('p',{class:'muted',style:'font-size:13px'},'A '+oQue+' fica na '+f.nome+' para o próximo turno. Se afinal acabaste alguma destas, volta atrás e marca-a.'));
+      if(esp) w.append(el('div',{class:'flag',style:'border-color:#eab308;color:#fde68a;margin-bottom:8px'},'⏸ Esta '+oQue+' está à espera de '+esp.material.toLowerCase()+(esp.desde?' desde '+esp.desde.slice(8,10)+'/'+esp.desde.slice(5,7):'')+'.')); }
+    // 21-10: com etapas por fazer PERGUNTA-SE porquê · 05-11: o mesmo quadro para tudo (quadroMotivoNao)
+    const sairP=(mot,m)=>{ const w0=meuW(); if(w0) w0.motivoNao=mot; gravarEtapas(); if(m) registarEspera(j,m); limpar(); state.jobPhase='menu'; if(w0) leaveWorker(j,w0); else render(); };
+    if(!quadroMotivoNao(w,{alvo:'a '+oQue+' '+(j.series||[]).join(', '),pl:false},P,sairP)) w.append(voltar);
+    return; }
   // 21-10-2026: ela — "o problema é que eles quando terminam não dão a caixa como concluída" (EM2433, EM2624: as 4 etapas feitas e
   // a caixa ficou presa na montagem; no turno seguinte o número certo não aparecia e escolhiam outro). Com TODAS as etapas feitas
   // a caixa fica pronta sem pergunta: se não estivesse pronta, não se marcava a última etapa.
@@ -1517,6 +1559,41 @@ function renderFimFase(w,j,f){
   w.append(voltar); }
 function renderFimFaseSimples(w,j,f){
   const fl=fluxoDoArtigo(j.artigo); const prox=proxFase(fl,f.id);
+  // 05-11-2026: «⏸ Não, continua depois» → o mesmo quadro do porquê (fim de turno / falta de material / ordem superior)
+  if(state._naoQ && state._naoQ.j===j.id){ const N=state._naoQ, s=j.series||[], mW=state.op?j.workers.find(x=>x.pin===state.op.pin && !x.endTs):null;
+    w.append(el('p',{class:'lbl'},f.ic+' '+f.nome+' da caixa '+s.join(', ')+' — não ficou concluída'));
+    const r=quadroMotivoNao(w,{alvo:(s.length>1?'as caixas ':'a caixa ')+s.join(', '),pl:s.length>1},N,(mot,m)=>{ state._naoQ=null; if(m) registarEspera(j,m); state.jobPhase='menu'; if(mW){ mW.motivoNao=mot; leaveWorker(j,mW); } else render(); });
+    if(!r && !N.b) w.append(el('button',{class:'big ghost',style:'margin-top:10px',onclick:()=>{ state._naoQ=null; render(); }},'⬅ Voltar'));
+    return; }
+  // 05-11-2026: ela — «quando são múltiplas caixas eles podem concluir 2 e ficam as outras para o dia seguinte» → com VÁRIAS caixas
+  // pergunta-se QUAIS ficaram concluídas; essas avançam e as outras seguem para o quadro do porquê (quadroMotivoNao).
+  const sS=j.series||[];
+  if(sS.length>1){
+    if(!state._sv||state._sv.j!==j.id) state._sv={j:j.id,sel:[],p:1};
+    const S=state._sv, mW=state.op?j.workers.find(x=>x.pin===state.op.pin && !x.endTs):null;
+    const prontas=sS.filter(x=>S.sel.includes(x)), restam=sS.filter(x=>!S.sel.includes(x));
+    const todas=()=>{ state._sv=null; registarFase(j,f.id); state._qty=sS.length; finishJob(j); };   // a quantidade como no «✅ Sim, concluída»
+    if(S.p===2){
+      w.append(el('p',{class:'lbl'},f.ic+' '+f.nome));
+      if(prontas.length) w.append(el('div',{class:'flag',style:'border-color:#34d399;color:#d1fae5;margin-bottom:8px'},'✅ Ficam prontas'+(prox?' e passam para "'+prox.nome+'"':'')+': '+prontas.join(', ')));
+      const r=quadroMotivoNao(w,{alvo:(restam.length>1?'as caixas ':'a caixa ')+restam.join(', '),pl:restam.length>1},S,(mot,m)=>{
+        state._sv=null; if(prontas.length) registarFase(Object.assign({},j,{series:prontas}),f.id); if(m) registarEspera(Object.assign({},j,{series:restam}),m);
+        state.jobPhase='menu'; if(mW){ mW.motivoNao=mot; leaveWorker(j,mW); } else render();
+        if(prontas.length && !jobWorkersAtivos(j).length){ j.series=j.series.filter(x=>!prontas.includes(x)); save(); pushTrabAberto(j,'aberto',true); } });
+      if(!r) w.append(el('button',{class:'big ghost',style:'margin-top:10px',onclick:()=>{ S.p=1; render(); }},'⬅ Voltar'));
+      return; }
+    w.append(el('p',{class:'lbl',style:'font-size:20px'},f.ic+' '+f.nome+' — que caixas ficaram CONCLUÍDAS?'));
+    w.append(el('p',{class:'muted',style:'font-size:14px;margin:-4px 0 10px'},'Toca nas caixas que ficaram MESMO acabadas. As outras ficam para depois.'));
+    const g=el('div',{style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:12px'});
+    sS.forEach(x=>{ const on=S.sel.includes(x), n=caixasDaSerie(x)||1;
+      g.append(el('button',{class:'item',style:'flex-direction:column;align-items:flex-start;gap:4px;padding:16px;border:2px solid '+(on?'#34d399':'#3b5568')+';background:'+(on?'#0f3b2c':'#0f1d2a'),onclick:()=>{ const i=S.sel.indexOf(x); if(i>=0) S.sel.splice(i,1); else S.sel.push(x); render(); }},
+        el('b',{style:'font-size:22px'},(on?'✅ ':'⬜ ')+x), el('small',{style:'color:var(--soft)'},(n>1?n+' caixas · ':'')+(on?'concluída':'por acabar')))); });
+    w.append(g);
+    const gb=el('div',{style:'display:grid;grid-template-columns:1fr 1fr;gap:12px'});
+    gb.append(el('button',{class:'big ok',onclick:todas},'✅ Ficaram todas concluídas'));
+    gb.append(el('button',{class:'big',style:'background:#2563eb;color:#fff;border-color:#60a5fa',onclick:()=>{ if(S.sel.length===sS.length) return todas(); S.p=2; render(); }},S.sel.length?('Seguinte ➜ ('+S.sel.length+' concluída'+(S.sel.length>1?'s':'')+')'):'Nenhuma ficou concluída ➜'));
+    w.append(gb);
+    return; }
   w.append(el('p',{class:'lbl'},f.ic+' '+f.nome+' da caixa '+(j.series||[]).join(', ')+' — ficou concluída?'));
   const g=el('div',{class:'pc-cands'});
   const B=blocoEtapas(w,j);
@@ -1527,7 +1604,7 @@ function renderFimFaseSimples(w,j,f){
     registarFase(j,f.id); state._qty=(j.series||[]).length||1; finishJob(j); }});
   sim.append(imgFase(fl,prox?prox.id:f.id,j.artigo), el('b',{},'✅ Sim, concluída'), el('small',{},prox?('a caixa passa para "'+prox.nome+'"'):'a caixa fica pronta'));
   const myW=state.op?j.workers.find(x=>x.pin===state.op.pin && !x.endTs):null;
-  const nao=el('button',{class:'pc-cx',onclick:()=>{ if(B){ const us=B.usos(); if(!B.sel.length && !us.length && !confirm('Não marcaste nenhuma etapa.\n\nNenhuma etapa ficou acabada neste turno?')) return; usarStock(j,us); if(myW){ myW.etapas=B.sel.slice(); if(us.length) myW.stock=us.map(u=>u.n); } registarEtapas(j,B.sel.slice()); } if(myW){ state.jobPhase='menu'; leaveWorker(j,myW); } else { state.jobPhase='menu'; render(); } }});
+  const nao=el('button',{class:'pc-cx',onclick:()=>{ if(B){ const us=B.usos(); if(!B.sel.length && !us.length && !confirm('Não marcaste nenhuma etapa.\n\nNenhuma etapa ficou acabada neste turno?')) return; usarStock(j,us); if(myW){ myW.etapas=B.sel.slice(); if(us.length) myW.stock=us.map(u=>u.n); } registarEtapas(j,B.sel.slice()); } state._naoQ={ j:j.id, b:!!B }; render(); }});   // 05-11: a seguir pergunta porquê
   nao.append(imgFase(fl,f.id,j.artigo), el('b',{},'⏸ Não, continua depois'), el('small',{},'o teu tempo fica registado; a caixa fica nesta fase'));
   g.append(sim,nao); w.append(g); }
 // 15-10: ela — transporte, stock e contagem "passam para dentro da logística"
@@ -2702,6 +2779,16 @@ function startJobConfirmado(){
       series=['STOCK-'+Date.now().toString().slice(-6)];
     }
   }
+  // 05-11-2026: ela — «na soldadura não podem estar a soldar 2 ao mesmo tempo… só um EM de cada vez» (soldam com o nº EM, como antes).
+  // (O Hilenio começou uma soldadura na EM2626 com a estrutura S1105-095800 do Nuno a meio — era a mesma peça.) Na SOLDADURA das
+  // caixas com estruturas: se há uma caixa EM (ou estrutura S…) com a soldadura começada e por acabar, de QUALQUER tipo, só se pode
+  // continuar essa (ou ajudar) — não se começa outra. O resto: componentes para stock (🧰).
+  { const flS=fluxoDoArtigo(d.artigo);
+    const f0=(usaEstruturas(flS) && series.length)?faseDaOperacao(flS,d.artigo,series[0],d.operacao):null;
+    if(f0 && f0.id==='sold'){ const U=x=>String(x||'').trim().toUpperCase();
+      const volta=()=>{ state._pcont=null; state._pfase='sold'; state.view=flS?'percurso':'board'; render(); };
+      const meio=estruturasPorAcabar();
+      if(meio.length && !series.every(s=>meio.some(x=>x.serie===U(s)))){ alert(txtEstrPorAcabar(meio)); volta(); return; } } }
   if(!foraDoPlanoOK(d, series)) return;   // 22-10: sem plano, só componentes para stock
   { const cx=series.reduce((t,x)=>t+caixasDaSerie(x),0);
     if(cx>series.length && series.length>1 && !confirm('Escolheste '+series.length+' CONJUNTOS = '+cx+' CAIXAS.\n\n'+series.map(x=>'   '+x+'   ('+caixasDaSerie(x)+' caixas)').join('\n')+'\n\nCada linha é um conjunto, não uma caixa só.\nSe vais fazer só um conjunto, cancela e escolhe só uma linha.\n\nÉ mesmo isto que vais fazer agora?')) return; }
@@ -2799,11 +2886,23 @@ function renderJob(w){
       el('span',{class:'t'}, el('b',{},wk.opCurto+(mine?' (tu)':'')), el('small',{}, 'a trabalhar · '+fmtHM(wActive(wk))))));
   });
   w.append(list);
-  if(!isWorker){ w.append(el('div',{class:'flag'},'⛔ Não estás neste trabalho — só um operador registado nele o pode concluir. (Correções são para o supervisor.)')); return; }
+  // 05-11-2026: ela — «muitas vezes quando alguém já está numa tarefa, se tentarem também entrar não conseguem» → quem toca no trabalho e
+  // não está nele (ou já tinha saído, ex.: no turno anterior) via só «⛔ Não estás neste trabalho» e não tinha como entrar. Agora: botão.
+  if(!myW){
+    w.append(el('div',{class:'flag',style:'border-color:#34d399;color:#d1fae5'},isWorker?'Já saíste deste trabalho. Para voltar a contar o teu tempo, entra outra vez.':'Ainda não estás neste trabalho.'));
+    w.append(el('button',{class:'big ok',style:'margin-top:10px',onclick:()=>entrarNoTrabalho(j)},'➕  Entrar neste trabalho (juntar-me à equipa)'));
+    if(state.op&&state.op.admin) w.append(el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>abrirCorrigir(j.id)},'✏️  Corrigir trabalho (artigo / série)'));
+    return; }
   w.append(el('p',{class:'muted',style:'margin:14px 0 6px;font-size:12px'},'Toca em "Operação concluída" quando terminares esta operação. Para mudar de operação, conclui esta e entra na próxima.'));
-  w.append(el('button',{class:'big ok',style:'margin-top:4px',onclick:()=>{state._qty=null;state._etSel=null;state._fimPasso=null;state.jobPhase='fim';render();}},'✅  Operação concluída (fecha o trabalho)'));
+  w.append(el('button',{class:'big ok',style:'margin-top:4px',onclick:()=>{state._qty=null;state._etSel=null;state._fimPasso=null;state._naoQ=null;state._sv=null;state.jobPhase='fim';render();}},'✅  Operação concluída (fecha o trabalho)'));
   if(state.op&&state.op.admin) w.append(el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>abrirCorrigir(j.id)},'✏️  Corrigir trabalho (artigo / série)'));
 }
+function entrarNoTrabalho(j){ const op=state.op; if(!op||!j||j.status==='done') return;
+  if(j.workers.some(x=>String(x.pin)===String(op.pin) && !x.endTs)){ toast('Já estás neste trabalho','err'); state.view='board'; render(); return; }
+  if(!podeComecarOutro(op,j)) return;
+  fecharParagemAoComecar(op,j);
+  j.workers.push({ op:op.nome, opCurto:curto(op.nome), pin:op.pin, startTs:nowTs(), pauses:[], status:'running', endTs:null });
+  save(); pushTrabAberto(j,'aberto'); toast('Juntaste-te à equipa ('+jobWorkersAtivos(j).length+' operadores)','ok'); state.view='board'; render(); }
 function pauseWorker(j,wk){ if(!wk){state.jobPhase='menu';return render();} wk.status='paused'; wk.pauseMotivo=state._rsn||'Paragem'; wk.pauses.push({start:nowTs(),motivo:wk.pauseMotivo}); state._rsn=null; state._pw=null; state.jobPhase='menu'; save(); toast('Em pausa','ok'); state.view='board'; render(); }
 function resumeWorker(j,wk){ closeWorkerPause(wk); wk.status='running'; wk.pauseMotivo=null; save(); toast('Retomado','ok'); render(); }
 function retomarDoOperador(op){
@@ -2950,7 +3049,7 @@ function enqueueRegisto(j,wk,concluida){
       UnidadeProducao:(j.unidade||unidadeDaOp(j.operacao,j.artigo)), Posto:postoDaUnidade(j.unidade||unidadeDaOp(j.operacao,j.artigo)), Colaborador:wk.op, Modo:j.modo,
       NumSerie:serie, HoraInicio:hhmm(wk.startTs), HoraFim:hhmm(wk.endTs||nowTs()),
       PausasMin:Math.round(pauMs/60000).toString(), Duracao:Math.round(durMs/60000).toString(),
-      Quantidade:'1', Plano:j.plano, Comentarios:(state.cfg&&state.cfg.modoTeste?'TESTE':((j.comentario||'')+((wk.etapasPorSerie||wk.etapas)?(' [etapas: '+(((wk.etapasPorSerie?(wk.etapasPorSerie[serie]||[]):wk.etapas)||[]).length?(wk.etapasPorSerie?(wk.etapasPorSerie[serie]||[]):wk.etapas).join(','):'nenhuma')+']'):'')+(wk.stock&&wk.stock.length?(' [stock: '+wk.stock.join(',')+']'):''))), CaixaConcluida:caixaConcl, OperacaoConcluida:(concluida?'Sim':'Nao'),
+      Quantidade:'1', Plano:j.plano, Comentarios:(state.cfg&&state.cfg.modoTeste?'TESTE':((j.comentario||'')+((wk.etapasPorSerie||wk.etapas)?(' [etapas: '+(((wk.etapasPorSerie?(wk.etapasPorSerie[serie]||[]):wk.etapas)||[]).length?(wk.etapasPorSerie?(wk.etapasPorSerie[serie]||[]):wk.etapas).join(','):'nenhuma')+']'):'')+(wk.stock&&wk.stock.length?(' [stock: '+wk.stock.join(',')+']'):'')+(wk.motivoNao?(' [não acabada: '+wk.motivoNao+']'):''))), CaixaConcluida:caixaConcl, OperacaoConcluida:(concluida?'Sim':'Nao'),
       Equipa:String((j.workers||[]).length), ConcluidoPor:(concluida?(j.terminadoPor||wk.op):''), DataHoraRegisto:dh });
   });
   try{ wk._reg = true; }catch(e){}   // esta sessão já tem registo — a rede não volta a escrever
