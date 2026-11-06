@@ -3054,7 +3054,9 @@ function enqueueRegisto(j,wk,concluida){
   series.forEach(serie=>{
     const _id = j.id+'-'+(wk.pin||'x')+'-'+wk.startTs+'-'+serie;
     if(jaEnviado(_id) || q.some(x=>x.ID===_id)) return; // anti-duplicado: mesmo ID ja enviado ou ja na fila
-    q.push({ ID:_id, Data:j.dia, Artigo:j.artigo, Programa:_prog, TipoCaixa:_prog, Operacao:j.operacao,
+    // 06-11-2026: a data do registo é o dia em que ESTA pessoa começou, não o dia em que o trabalho foi aberto (a tampa da EM2381,
+    // aberta a 05-11 e continuada a 06-11 das 06:07 às 08:38, ficou com as horas de 06-11 gravadas em 05-11)
+    q.push({ ID:_id, Data:(wk.startTs?dstr(wk.startTs):j.dia), Artigo:j.artigo, Programa:_prog, TipoCaixa:_prog, Operacao:j.operacao,
       UnidadeProducao:(j.unidade||unidadeDaOp(j.operacao,j.artigo)), Posto:postoDaUnidade(j.unidade||unidadeDaOp(j.operacao,j.artigo)), Colaborador:wk.op, Modo:j.modo,
       NumSerie:serie, HoraInicio:hhmm(wk.startTs), HoraFim:hhmm(wk.endTs||nowTs()),
       PausasMin:Math.round(pauMs/60000).toString(), Duracao:Math.round(durMs/60000).toString(),
