@@ -1391,8 +1391,27 @@ function popupEtapas(o){
   const fechar=()=>fundo.remove();
   const g=el('div',{style:'display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px'});
   g.append(el('button',{class:'big ghost',style:'margin:0;font-size:20px',onclick:fechar},'✏️ Não, corrigir'));
-  g.append(el('button',{class:'big ok',style:'margin:0;font-size:20px',onclick:()=>{ fechar(); o.ok(); }},'✅ Sim, foi isto que fiz'));
+  g.append(el('button',{class:'big ok',style:'margin:0;font-size:20px',onclick:()=>{ fechar();
+    if(o.aviso) alertaQ('etapas', (o.caixas||[]).map(c=>(c.nome?c.nome+': ':'')+'marcou '+(c.feitas.map(t=>String(t).split('.')[0]).join(', ')||'nenhuma')).join(' · ')+' — '+String(o.aviso).replace(/^⚠\s*ATENÇÃO:\s*/,'').replace(/\n/g,' '));
+    o.ok(); }},'✅ Sim, foi isto que fiz'));
   cx.append(g); fundo.append(cx); const ant=document.getElementById('popEtapas'); if(ant) ant.remove(); document.body.append(fundo); }
+// 06-11-2026: ela — «o problema é que eles não alertam para os problemas, sou eu que tenho que andar à pesca» e «esta das Fracs ninguém
+// me avisou que não conseguia entrar». ALERTAS para o Supervisor («🔔 Alertas do dia»): uma linha «ALERTA» na folha Fases (Job =
+// «tipo|texto») com quem, aparelho, hora, caixa e o que dizia. Sempre que o quiosque mostra uma MENSAGEM (alert) — são as mensagens de
+// bloqueio/erro — e quando alguém confirma etapas com muito pouco tempo. A mesma mensagem à mesma pessoa só conta 1 vez em 10 min.
+// Não grava em testes (TESTE-Claude / __TESTE / modoTeste) nem para a Sónia (admin).
+var _alertasFeitos={};
+function alertaQ(tipo, texto){ try{
+  if(window.__TESTE || deviceName()==='TESTE-Claude' || (state.cfg&&state.cfg.modoTeste)) return;
+  const op=state.op; if(op && op.admin) return;
+  const t=String(texto==null?'':texto).replace(/\s+/g,' ').trim().slice(0,400); if(!t) return;
+  const quem=op?curto(op.nome):'', agora=nowTs(), k=tipo+'|'+quem+'|'+t.slice(0,80);
+  if(_alertasFeitos[k] && agora-_alertasFeitos[k]<10*60000) return; _alertasFeitos[k]=agora;
+  const j=(state.view==='job' && typeof curJob==='function')?curJob():null, d=state.draft||{};
+  const art=j?j.artigo:(d.artigo||''), ser=j?(j.series||[]).join(' '):([].concat(d.sel||[]).join(' ')||String(d.stock||'')), opx=j?j.operacao:(d.operacao||'');
+  const a=lerFases(); a.push({ ID:'AL-'+agora+'-'+Math.floor(Math.random()*1000), Data:dstr(agora), Artigo:art||'', Serie:ser||'', Fase:'ALERTA', Operacao:opx||'', Quem:quem||'(antes do PIN)', Dispositivo:deviceName(), DataHoraRegisto:new Date().toLocaleString('pt-PT'), Job:tipo+'|'+t });
+  gravarFases(a); syncFases(); }catch(e){} }
+(function(){ const _al=window.alert; window.alert=function(m){ try{ alertaQ('bloqueio', m); }catch(e){} return _al.call(window, m); }; })();
 function blocoEtapas(w,j){ const et=etapasDe(j.artigo,j.operacao); if(!et) return null;
   const feitas=etapasFeitas(j.artigo,(j.series||[])[0],j.operacao,j.id);
   const doStock=etapasDoStock(j.artigo,(j.series||[])[0],j.operacao), doJob=etapasDoJob(j);
