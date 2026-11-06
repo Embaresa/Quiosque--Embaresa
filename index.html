@@ -2814,6 +2814,15 @@ function startJobConfirmado(){
   if(d._estrLiga && !ehEstr && series.length===1){ const pr=estruturasDe(d.artigo).filter(x=>!x.uso && x.sold).sort((p,q)=>(p.soldTs||0)-(q.soldTs||0));
     if(!pr.length){ d._estrLiga=false; alert('Já não há estruturas soldadas deste tipo no armazém.\n\nVolta atrás e escolhe outra caixa.'); state.view='percurso'; render(); return; }
     liga=pr[0]; }
+  // 06-11-2026: ela — «o Joaquim está a fazer os 6 ailerons mas só permites iniciar 1 trabalho» (2*AILLERONS94, 95 e 96). Com «um
+  // operador, um trabalho», começar a 95 fechava a 94. Mas é o MESMO trabalho (mesmo artigo e operação) com mais caixas → as caixas novas
+  // JUNTAM-SE ao trabalho que a pessoa já tem a correr NESTE aparelho (um trabalho só, com todas as caixas).
+  if(!liga){ const pin=String((state.op&&state.op.pin)||''), U=x=>String(x||'').trim().toUpperCase();
+    const meu=pin && (state.jobs||[]).find(j=>j.status!=='done' && !j.transp && String(j.artigo||'')===String(artJob) && j.operacao===d.operacao && (j.workers||[]).some(w=>String(w.pin)===pin && !w.endTs));
+    if(meu){ const novas=series.filter(s=>!(meu.series||[]).some(x=>U(x)===U(s)));
+      if(!novas.length){ toast('Já estás neste trabalho','ok'); state.view='board'; render(); return; }
+      meu.series=(meu.series||[]).concat(novas); d._estrLiga=false; save(); pushTrabAberto(meu,'aberto',true);
+      toast('Juntaste '+novas.join(', ')+' ao teu trabalho — agora: '+meu.series.join(', '),'ok'); state.view='board'; render(); return; } }
   const sig=d.operacao+'|'+series.slice().sort().join(',');
   const existing=state.jobs.find(j=>j.status!=='done' && (j.operacao+'|'+(j.series||[]).slice().sort().join(','))===sig);
   if(!podeComecarOutro(state.op, existing)) return;
