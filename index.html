@@ -507,6 +507,7 @@ function render(){
     else if(state.view==='artigo') renderArtigo(w);
     else if(state.view==='compstock') renderCompStock(w);
     else if(state.view==='planos') renderPlanos(w);
+    else if(state.view==='semana') renderSemana(w);   // 16-11
     else if(state.view==='stockmap') renderStockMap(w);
     else if(state.view==='stockmov') renderStockMov(w);
   else if(state.view==='contagem') renderContagem(w);
@@ -2049,6 +2050,7 @@ function entregaProgK(t){ if(!t || !t.serie || t._entrega || t.comp) return null
   return d<=dstr(lim.getTime())?{ data:d, urg:d<=dstr(nowTs()) }:null; }
 function painelPlano(){ state._quadroPre=null; state._trPre=null; const ver=areasDoPlano(); if(!ver.length) return null; const p=el('div',{class:'plano'}), tA=new Date().getHours()<14?'T1':'T2', ord=t=>t._vem?-1:t.turno===tA?0:!t.turno?1:2;
   p.append(el('h2',{},'🗒️ Plano de trabalhos'), el('div',{style:'color:var(--soft);font-size:13px'},'Hoje · toca na tua tarefa e põe o PIN'));
+  p.append(el('button',{class:'btn',style:'display:block;width:100%;margin:10px 0 8px;padding:14px 16px;font-size:20px;font-weight:900;background:#2563eb;color:#fff;border:2px solid #93c5fd;border-radius:12px;box-shadow:0 0 0 3px rgba(37,99,235,.35);letter-spacing:.02em',onclick:()=>{ state._semOff=0; state.view='semana'; render(); }},'📅 VER O PLANO DA SEMANA ›'));   // 16-11 (destaque, ela: «pede estar em destaque para eles perceberem»)
   let n=0;
   AREAS_Q.filter(a=>ver.includes(a.id)).forEach(a=>{ const l=tarefasDoQuadro(a.id); if(!l.length) return; n+=l.length;
     p.append(el('div',{class:'pa',style:'color:'+a.cor},a.ic+' '+a.nome));
@@ -2277,6 +2279,43 @@ function verPlano(p){
 }
 
 /* ---- CONSULTAR PLANOS (só consulta, sem iniciar operação) ---- */
+// 16-11-2026: ela — «eu gostava que este quadro aparecesse no quiosque» (o 📅 Planeamento Produção das Encomendas), «todas as áreas».
+// A semana (seg–dom) com as tarefas do quadro do dia por área. Não muda o plano; tocar numa tarefa = PIN e começa (como no Plano de trabalhos).
+function renderSemana(w){
+  w.append(backbar('board','📅 Plano da semana'));
+  const off=state._semOff||0, h=new Date(), seg=new Date(h.getFullYear(),h.getMonth(),h.getDate());
+  seg.setDate(seg.getDate()-((seg.getDay()+6)%7)+off*7);
+  const dias=[0,1,2,3,4,5,6].map(i=>{ const d=new Date(seg); d.setDate(seg.getDate()+i); return d; });
+  const dmS=d=>String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0'), hoje=dstr(nowTs());
+  const vt=quadroVeTestes(), q=((state.cfg&&state.cfg.quadro&&state.cfg.quadro.tarefas)||[]).filter(t=>!t.fechada && (!t.teste || vt));
+  const bt=(txt,fn)=>el('button',{class:'btn',style:'padding:8px 14px;font-size:15px',onclick:fn},txt);
+  w.append(el('div',{style:'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0 12px'},
+    bt('◀ Anterior',()=>{ state._semOff=off-1; render(); }),
+    el('b',{style:'font-size:19px'},dmS(dias[0])+' – '+dmS(dias[6])),
+    bt('Seguinte ▶',()=>{ state._semOff=off+1; render(); }),
+    off?bt('Esta semana',()=>{ state._semOff=0; render(); }):null,
+    el('span',{style:'color:var(--soft);font-size:13px'},'Toca numa tarefa e põe o PIN para a começar — também as de outros dias, se se adiantarem.')));
+  const NOMES=['SEG','TER','QUA','QUI','SEX','SÁB','DOM'], ordT=t=>t.turno==='T1'?0:t.turno==='T2'?1:2;
+  const g=el('div',{style:'display:grid;grid-template-columns:repeat(7,minmax(150px,1fr));gap:8px;overflow-x:auto;padding-bottom:6px'});
+  dias.forEach((d,i)=>{ const ds=dstr(d.getTime()), eHoje=ds===hoje;
+    const col=el('div',{style:'background:'+(eHoje?'#16263a':'#111c25')+';border:'+(eHoje?'2px solid #60a5fa':'1px solid #223240')+';border-radius:10px;padding:8px;min-height:260px'});
+    col.append(el('div',{style:'text-align:center;border-bottom:1px solid #223240;padding-bottom:5px;margin-bottom:6px'},
+      el('div',{style:'font-size:12px;color:var(--soft)'},NOMES[i]), el('div',{style:'font-size:22px;font-weight:800'},String(d.getDate())), el('div',{style:'font-size:11px;color:var(--soft)'},dmS(d))));
+    let n=0;
+    AREAS_Q.forEach(a=>{ const l=q.filter(t=>t.dia===ds && t.area===a.id).sort((x,y)=>ordT(x)-ordT(y)); if(!l.length) return; n+=l.length;
+      col.append(el('div',{style:'font-size:12px;font-weight:800;color:'+a.cor+';border-bottom:2px solid '+a.cor+';margin:8px 0 4px;text-transform:uppercase'},a.ic+' '+a.nome+' · '+l.length));
+      l.forEach(t=>{ let e=''; try{ e=estadoTarefaQ(t); }catch(x){} let ep=null; try{ ep=e==='ok'?null:entregaProgK(t); }catch(x){}
+        const nome=t.comp?('🧰 '+(t.qtd?t.qtd+' jogo(s)':'quantos der')):(t.serie||(t.semNum?('📝 sem número'+(t.qtd?' · '+t.qtd+' cx':'')):'🆕 Estrutura nova'));
+        col.append(el('button',{style:'display:block;width:100%;text-align:left;color:inherit;cursor:pointer;background:#0b1319;border:1px solid #223240;border-left:5px solid '+(ep?(ep.urg?'#ef4444':'#f97316'):a.cor)+';border-radius:6px;padding:5px 7px;margin-bottom:5px;font-size:13px'+(e==='ok'?';opacity:.55':''),
+          onclick:()=>{ state.intent='work'; state._areaPre=a; state._quadroPre=t; state.op=null; state.pinbuf=''; state.view='pin'; render(); }},   // 16-11: ela - «podiam entrar nos trabalhos por aqui também caso acelerem»
+          ep?el('div',{style:'display:inline-block;margin-bottom:3px;padding:1px 6px;border-radius:4px;font-weight:900;font-size:11px;'+(ep.urg?'background:#fde047;color:#7f1d1d':'background:#f97316;color:#1c0a00')},(ep.urg?'🚨 URGENTE':'🔥 PRIORITÁRIO')+' · entrega '+ep.data.slice(8,10)+'/'+ep.data.slice(5,7)):null,
+          el('div',{style:'font-weight:800'},(e==='ok'?'✅ ':e==='run'?'▶ ':'')+nome),
+          el('div',{style:'color:var(--soft);font-size:12px'},t.artigo+(t.turno?' · '+t.turno:'')),
+          t.nota?el('div',{style:'color:#fbbf24;font-size:12px'},t.nota):null)); }); });
+    if(!n) col.append(el('div',{style:'text-align:center;color:#4b5d6b;font-size:12px;padding-top:30px'},'Sem trabalho planeado'));
+    g.append(col); });
+  w.append(g);
+}
 function renderPlanos(w){
   w.append(backbar('board','Consultar planos'));
   w.append(el('p',{class:'lbl'},'Procura por artigo, código ou tipologia — só consulta, não inicia trabalho.'));
