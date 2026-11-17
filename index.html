@@ -920,12 +920,27 @@ const PERT_QUE_SAO_TRABALHO_NA_LOGISTICA = /organiza|movimenta|descarga cami|lim
 // Paragens reservadas a uma pessoa. A Sonia (09-09-2026): "a gestao de equipa apenas pode
 // ser utilizada pelo Rui" — e o que ela escreveu na folha ConfigPerturbacoes ("apenas para Rui Richau").
 const PERT_SO_PARA = [ { re:/gest[ãa]o\s*equipa/i, quem:/rich/i } ];
+// 17-11-2026 — ela: «somente os motoristas podem utilizar a organização; são apenas eles e o Bruno nas frações que fazem
+// organização; todos os outros têm que começar uma operação». Novembro: ~380 h de organização em 11 dias, 2/3 em blocos de 2 h+.
+// Os motoristas registam-na como operação (Logística → Organização material); o Bruno pela paragem. Os outros não veem estas
+// paragens nem conseguem começar a operação «Organização material». (Movimentação de resíduos e descarga de camião ficam.)
+const PERT_ORGANIZACAO = /organiza|movimenta[cç][aã]o de material/i;
+const ORG_SO_PARA_NOME = /bruno\s+santos/i;
+function podeOrganizar(op){ return !!op && (/transp/i.test(String(op.seccao||'')+' '+String(op.unidade||'')) || ORG_SO_PARA_NOME.test(String(op.nome||''))); }
+// 17-11-2026 — ela: «estas perturbações estão interditas» (lista dela). As de organização ficam só para o Bruno (regra acima);
+// as de preparação de material saem para TODOS — é trabalho, regista-se pela operação.
+const PERT_INTERDITAS = ['Preparação de material para Embalamentos no cliente', 'Preparação material para stock de semiacabados- soldadura',
+  'Preparação material para stock de semiacabados E2/Praetor/ KC390', 'Preparação material para stock de semiacabados Fracções'];
+const normPert = m => String(m||'').normalize('NFC').toLowerCase().replace(/\s+/g,' ').trim();
+function pertInterdita(m){ return PERT_INTERDITAS.some(x => normPert(x) === normPert(m)); }
 function motivosParaEsteOperador(){
   const todos = (state.cfg && state.cfg.perturbacoes) || [];
   const nome = String((state.op && state.op.nome) || '');
   const sec = String((state.op && state.op.seccao) || '');
   let lista = todos.filter(m => !PERT_SO_PARA.some(x => x.re.test(String(m||'')) && !x.quem.test(nome)));
   if(/transp/i.test(sec)) lista = lista.filter(m => !PERT_QUE_SAO_TRABALHO_NA_LOGISTICA.test(String(m||'')));
+  else if(!podeOrganizar(state.op)) lista = lista.filter(m => !PERT_ORGANIZACAO.test(String(m||'')));
+  lista = lista.filter(m => !pertInterdita(m));
   return lista;
 }
 function renderPertMotivo(w){
@@ -935,6 +950,8 @@ function renderPertMotivo(w){
   const lista = motivosParaEsteOperador();
   if(/transp/i.test(String((state.op && state.op.seccao) || ''))){
     w.append(el('div',{class:'flag'},'Movimentar e organizar material é o teu trabalho, não uma paragem — regista pelo ▶ Começar, em Logística.'));
+  } else if(!podeOrganizar(state.op)){
+    w.append(el('div',{class:'flag'},'A organização e movimentação de material é só para os motoristas e o Bruno. Se não estás parado, começa uma operação pelo ▶ Começar.'));
   }
   const box=el('div',{class:'reasons'});
   lista.forEach(r=>box.append(el('button',{class:'rc'+(state.pertDraft.motivo===r?' on':''),onclick:()=>{state.pertDraft.motivo=r;render();}},r)));
@@ -2758,6 +2775,8 @@ function podeComecarOutro(op, ignorar){
 }
 // 15-10: CONFIRMAR A CAIXA antes de arrancar — em grande, com o desenho: "Vais trabalhar na EM2377 · KC 390-Upper Esq".
 function startJob(){
+  if(state.draft && PERT_ORGANIZACAO.test(String(state.draft.operacao||'')) && !podeOrganizar(state.op)){   // 17-11: ver PERT_ORGANIZACAO
+    toast('A organização de material é só para os motoristas e o Bruno. Escolhe a operação que vais fazer.','err'); return; }
   if(state._confCx){ state._confCx=false; return startJobConfirmado(); }
   const d=state.draft; const ser=d.modo==='Encomenda'?(d.sel||[]).concat(d._fora?parseSeries(d.fora):[]):parseSeries(d.stock);
   state._confVolta=state.view; state.view='confcx'; render(); }
@@ -2970,14 +2989,18 @@ function renderJob(w){
   // não está nele (ou já tinha saído, ex.: no turno anterior) via só «⛔ Não estás neste trabalho» e não tinha como entrar. Agora: botão.
   if(!myW){
     w.append(el('div',{class:'flag',style:'border-color:#34d399;color:#d1fae5'},isWorker?'Já saíste deste trabalho. Para voltar a contar o teu tempo, entra outra vez.':'Ainda não estás neste trabalho.'));
-    w.append(el('button',{class:'big ok',style:'margin-top:10px',onclick:()=>entrarNoTrabalho(j)},'➕  Entrar neste trabalho (juntar-me à equipa)'));
+    if(trabalhoDosMotoristas(j) && !/transp/i.test(String(state.op&&state.op.seccao||'')+' '+String(state.op&&state.op.unidade||''))) w.append(el('div',{class:'flag'},'Este trabalho é dos motoristas — ninguém se pode juntar. Começa uma operação pelo ▶ Começar.'));   // 17-11: ver trabalhoDosMotoristas
+    else w.append(el('button',{class:'big ok',style:'margin-top:10px',onclick:()=>entrarNoTrabalho(j)},'➕  Entrar neste trabalho (juntar-me à equipa)'));
     if(state.op&&state.op.admin) w.append(el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>abrirCorrigir(j.id)},'✏️  Corrigir trabalho (artigo / série)'));
     return; }
   w.append(el('p',{class:'muted',style:'margin:14px 0 6px;font-size:12px'},'Toca em "Operação concluída" quando terminares esta operação. Para mudar de operação, conclui esta e entra na próxima.'));
   w.append(el('button',{class:'big ok',style:'margin-top:4px',onclick:()=>{state._qty=null;state._etSel=null;state._fimPasso=null;state._naoQ=null;state._sv=null;state.jobPhase='fim';render();}},'✅  Operação concluída (fecha o trabalho)'));
   if(state.op&&state.op.admin) w.append(el('button',{class:'big ghost',style:'margin-top:8px',onclick:()=>abrirCorrigir(j.id)},'✏️  Corrigir trabalho (artigo / série)'));
 }
+// 17-11-2026 — ela: «ninguém se pode juntar a um trabalho dos motoristas» (transportes ANN e trabalhos de Logística/Transporte).
+function trabalhoDosMotoristas(j){ return !!j && (!!j.transp || /^(logistica|transporte)$/i.test(String(j.artigo||'').trim()) || ['Embaresa PT','Transportes'].includes(String(j.unidade||''))); }
 function entrarNoTrabalho(j){ const op=state.op; if(!op||!j||j.status==='done') return;
+  if(trabalhoDosMotoristas(j) && !/transp/i.test(String(op.seccao||'')+' '+String(op.unidade||''))){ toast('Este trabalho é dos motoristas — ninguém se pode juntar.','err'); state.view='board'; render(); return; }
   if(j.workers.some(x=>String(x.pin)===String(op.pin) && !x.endTs)){ toast('Já estás neste trabalho','err'); state.view='board'; render(); return; }
   if(!podeComecarOutro(op,j)) return;
   fecharParagemAoComecar(op,j);
