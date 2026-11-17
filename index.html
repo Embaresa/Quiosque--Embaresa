@@ -951,7 +951,7 @@ function renderPertMotivo(w){
   if(/transp/i.test(String((state.op && state.op.seccao) || ''))){
     w.append(el('div',{class:'flag'},'Movimentar e organizar material é o teu trabalho, não uma paragem — regista pelo ▶ Começar, em Logística.'));
   } else if(!podeOrganizar(state.op)){
-    w.append(el('div',{class:'flag'},'A organização e movimentação de material é só para os motoristas e o Bruno. Se não estás parado, começa uma operação pelo ▶ Começar.'));
+    w.append(el('div',{class:'flag'},'A movimentação e a organização do material já estão incluídas no tempo de cada operação — não se registam como paragem. Ir buscar, preparar e arrumar o material da caixa faz parte da operação: começa-a pelo ▶ Começar.'));
   }
   const box=el('div',{class:'reasons'});
   lista.forEach(r=>box.append(el('button',{class:'rc'+(state.pertDraft.motivo===r?' on':''),onclick:()=>{state.pertDraft.motivo=r;render();}},r)));
@@ -2776,7 +2776,7 @@ function podeComecarOutro(op, ignorar){
 // 15-10: CONFIRMAR A CAIXA antes de arrancar — em grande, com o desenho: "Vais trabalhar na EM2377 · KC 390-Upper Esq".
 function startJob(){
   if(state.draft && PERT_ORGANIZACAO.test(String(state.draft.operacao||'')) && !podeOrganizar(state.op)){   // 17-11: ver PERT_ORGANIZACAO
-    toast('A organização de material é só para os motoristas e o Bruno. Escolhe a operação que vais fazer.','err'); return; }
+    toast('A organização e a movimentação do material já estão incluídas em cada operação. Escolhe a operação que vais fazer.','err'); return; }
   if(state._confCx){ state._confCx=false; return startJobConfirmado(); }
   const d=state.draft; const ser=d.modo==='Encomenda'?(d.sel||[]).concat(d._fora?parseSeries(d.fora):[]):parseSeries(d.stock);
   state._confVolta=state.view; state.view='confcx'; render(); }
