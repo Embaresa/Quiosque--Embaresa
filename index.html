@@ -2746,10 +2746,13 @@ function serieFechadaPara(estado, operacao){
 function podeComecarOutro(op, ignorar){
   try{
     if(!op) return true;
-    if(/transp/i.test(String(op.seccao||'')+' '+String(op.unidade||''))) return true;
+    // 18-11-2026 — ela (Taffaly: «Organização material» 14:06-21:10 aberta por cima de 3 transportes): «quando isto acontece o trabalho
+    // anterior deveria ser parado». Os motoristas deixam de estar isentos: começar um transporte ou outro trabalho fecha a Logística que
+    // tinham aberta (nunca um transporte a meio — esse tem as fases dele).
+    const ehMot=/transp/i.test(String(op.seccao||'')+' '+String(op.unidade||''));
     const pin=String(op.pin||''); if(!pin) return true;
     fecharParagensNoutros(op);   // 05-11: a paragem que a pessoa deixou aberta NOUTRO aparelho fecha a esta hora
-    const fora=a=>/^(logistica|transporte)$/i.test(String(a||'').trim());
+    const fora=a=>(ehMot?/^transporte$/i:/^(logistica|transporte)$/i).test(String(a||'').trim());
     const meus=[];
     (state.jobs||[]).forEach(j=>{ if(j===ignorar || j.status==='done' || j.transp || fora(j.artigo)) return;
       (j.workers||[]).forEach(w=>{ if(String(w.pin)===pin && !w.endTs && w.status!=='paused') meus.push({j:j,w:w}); }); });
@@ -3616,6 +3619,7 @@ function trNovo(){
   if(!/transp/i.test((op.seccao||'')+' '+(op.unidade||''))){ state.op=null; state.view='board'; toast('Só os motoristas (Transportes) fazem transportes.','err'); return; }
   const aberto=state.jobs.find(j=>j.status!=='done' && j.transp && (j.workers||[]).some(w=>String(w.pin)===String(op.pin) && !w.endTs));
   if(aberto){ state.curJob=aberto.id; state._trErros=[]; state.view='job'; render(); loadStockMap().then(()=>{ if(state.view==='job') render(); }); return; }
+  podeComecarOutro(op, null);   // 18-11: fecha a Logística (organização) que o motorista tinha aberta
   const o=trOperacao(); if(!o){ state.view='board'; toast('Falta a operação de transporte no catálogo','err'); return; }
   const agora=nowTs(); const d=new Date(agora);
   const worker={ op:op.nome, opCurto:curto(op.nome), pin:op.pin, startTs:agora, pauses:[], status:'running', endTs:null };
