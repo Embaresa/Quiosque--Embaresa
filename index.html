@@ -425,7 +425,7 @@ function unidadeDaOp(operacao, artigo){
 // os mesmos da KPI e da Avaliação. A lista antiga (temposArtigoOperacao) dava p.ex. 21 h na soldadura da E2 em vez de 11 h.
 function objetivoOficial(op, artigo){ const n=s=>String(s||'').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ');
   const o=((state.cfg&&state.cfg.objetivosArtigoOperacao)||[]).find(x=>n(x.caixa)===n(artigo)&&n(x.operacao)===n(op)); if(!o) return 0;
-  const h=Number(o.apos1610)||Number(o.apos)||Number(o.ate)||0; return h>0?h:0; } /* 16-10: "após 16-10" quando existe */
+  const h=Number(o.atual)||Number(o.apos1610)||Number(o.apos)||Number(o.ate)||0; /* 19-11: "atual" = a coluna "apos DD-MM" mais recente */ return h>0?h:0; } /* 16-10: "após 16-10" quando existe */
 function objetivoOperacao(op, artigo){ const h=objetivoOficial(op,artigo); if(h>0){ const m=Math.round(h*60); return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0')+':00'; }
   const ao=state.cfg.temposArtigoOperacao||{}; let v=(artigo?(ao[artigo+'|'+op]||''):''); if(!v) v=state.cfg.temposOperacao[op]||''; if(!v && artigo) v=(state.cfg.temposTipologia||{})[artigo]||''; return v; }
 function parseObjetivoMs(str){ if(!str) return 0; str=String(str).trim();
